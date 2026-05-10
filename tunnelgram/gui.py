@@ -25,7 +25,7 @@ from .faketls import build_faketls_secret_hex, hostname_to_hex
 from .mtproto import generate_secret_hex, telegram_link, validate_secret_hex
 
 APP_NAME = "tunnelgram"
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_REPO = "youngchasy/tunnelgram"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -179,6 +179,10 @@ TRANSLATIONS = {
         "cf_hint": "только если есть свой домен в Cloudflare",
         "cf_suffix": "Cloudflare suffix (вводить если выбран режим Cloudflare DNS)",
         "domains_label": "Домены (дефолт kws)",
+        "pin_ip_label": "Pin Telegram IP",
+        "pin_ip_hint": "может помочь при плохом DNS, но иногда ломает часть DC",
+        "direct_fallback_label": "Direct TCP fallback",
+        "direct_fallback_hint": "пробовать прямое TCP-подключение к Telegram DC, если WSS не работает",
         "dc_names": "имена DC",
 
         "save": "Сохранить",
@@ -318,6 +322,10 @@ TRANSLATIONS = {
         "cf_hint": "only if you have your own Cloudflare domain",
         "cf_suffix": "Cloudflare suffix (only for Cloudflare DNS mode)",
         "domains_label": "Domains (default: kws)",
+        "pin_ip_label": "Pin Telegram IP",
+        "pin_ip_hint": "may help with bad DNS, but can break some DCs",
+        "direct_fallback_label": "Direct TCP fallback",
+        "direct_fallback_hint": "try direct TCP to Telegram DC if WSS does not work",
         "dc_names": "DC names",
 
         "save": "Save",
@@ -1343,15 +1351,78 @@ class App(tk.Tk):
             widget.bind("<Button-4>", _basic_on_mousewheel)
             widget.bind("<Button-5>", _basic_on_mousewheel)
 
-        route = self.make_section(body)
-        route.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        route_card = self.make_section(body)
+        route_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+
+        route_card.grid_propagate(False)
+        route_card.configure(height=680)
+
+        route_card.rowconfigure(0, weight=1)
+        route_card.columnconfigure(0, weight=1)
+
+        route_canvas = tk.Canvas(
+            route_card,
+            bd=0,
+            highlightthickness=0,
+            relief="flat",
+            bg=self.theme["card"],
+        )
+        route_scrollbar = tk.Scrollbar(
+            route_card,
+            orient="vertical",
+            command=route_canvas.yview,
+        )
+        route_canvas.configure(yscrollcommand=route_scrollbar.set)
+
+        route_canvas.grid(row=0, column=0, sticky="nsew")
+        route_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        route = tk.Frame(route_canvas, bd=0, bg=self.theme["card"])
+        route_window = route_canvas.create_window((0, 0), window=route, anchor="nw")
+
+        self.watch(route, "card")
+        self.route_canvas = route_canvas
+
+        def _route_on_frame_configure(event=None):
+            route_canvas.configure(scrollregion=route_canvas.bbox("all"))
+
+        def _route_on_canvas_configure(event):
+            route_canvas.itemconfigure(route_window, width=event.width)
+
+        route.bind("<Configure>", _route_on_frame_configure)
+        route_canvas.bind("<Configure>", _route_on_canvas_configure)
+
+        def _route_on_mousewheel(event):
+            if event.delta:
+                route_canvas.yview_scroll(int(-event.delta / 120), "units")
+            elif getattr(event, "num", None) == 4:
+                route_canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                route_canvas.yview_scroll(1, "units")
+
+        for widget in (route_canvas, route):
+            widget.bind("<MouseWheel>", _route_on_mousewheel)
+            widget.bind("<Button-4>", _route_on_mousewheel)
+            widget.bind("<Button-5>", _route_on_mousewheel)
+
+        def _route_bind_mousewheel(event=None):
+            route_canvas.bind_all("<MouseWheel>", _route_on_mousewheel)
+            route_canvas.bind_all("<Button-4>", _route_on_mousewheel)
+            route_canvas.bind_all("<Button-5>", _route_on_mousewheel)
+
+        def _route_unbind_mousewheel(event=None):
+            route_canvas.unbind_all("<MouseWheel>")
+            route_canvas.unbind_all("<Button-4>")
+            route_canvas.unbind_all("<Button-5>")
+
+        route_card.bind("<Enter>", _route_bind_mousewheel)
+        route_card.bind("<Leave>", _route_unbind_mousewheel)
 
         body.rowconfigure(0, weight=1)
 
-        route.grid_propagate(False)
-
         basic.columnconfigure(0, weight=1)
         basic.columnconfigure(1, weight=1)
+        route.columnconfigure(0, weight=1)
         route.columnconfigure(1, weight=1)
 
         self.make_label(basic, self.tr("basic"), role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
@@ -1553,6 +1624,74 @@ class App(tk.Tk):
             "names",
         ).grid(row=0, column=1, sticky="w", padx=(18, 0))
 
+        advanced_box = tk.Frame(route, bd=0)
+        self.watch(advanced_box, "card")
+        advanced_box.grid(
+            row=4,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=18,
+            pady=(12, 10),
+        )
+        advanced_box.columnconfigure(0, weight=1)
+
+        self.add_check(
+            advanced_box,
+            self.tr("pin_ip_label"),
+            self.pin_telegram_ip,
+        ).grid(row=0, column=0, sticky="w")
+
+        pin_hint_label = self.make_label(
+            advanced_box,
+            self.tr("pin_ip_hint"),
+            role="muted",
+            size=8,
+            bg="card",
+            wraplength=260,
+            justify="left",
+        )
+        pin_hint_label.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=(24, 12),
+            pady=(2, 10),
+        )
+
+        self.add_check(
+            advanced_box,
+            self.tr("direct_fallback_label"),
+            self.direct_fallback,
+        ).grid(row=2, column=0, sticky="w")
+
+        direct_hint_label = self.make_label(
+            advanced_box,
+            self.tr("direct_fallback_hint"),
+            role="muted",
+            size=8,
+            bg="card",
+            wraplength=260,
+            justify="left",
+        )
+        direct_hint_label.grid(
+            row=3,
+            column=0,
+            sticky="ew",
+            padx=(24, 12),
+            pady=(2, 0),
+        )
+
+        def _advanced_hints_wrap(event=None):
+            try:
+                width = max(180, advanced_box.winfo_width() - 56)
+                pin_hint_label.configure(wraplength=width)
+                direct_hint_label.configure(wraplength=width)
+            except Exception:
+                pass
+
+        advanced_box.bind("<Configure>", _advanced_hints_wrap)
+
         bottom = tk.Frame(frame, bd=0)
         self.watch(bottom, "bg")
         bottom.grid(row=3, column=0, sticky="ew", pady=(16, 0))
@@ -1695,12 +1834,14 @@ class App(tk.Tk):
                 pady=12,
             )
 
-        if hasattr(self, "basic_canvas"):
-            try:
-                if self.basic_canvas.winfo_exists():
-                    self.basic_canvas.configure(bg=t["card"])
-            except Exception:
-                pass
+        for canvas_name in ("basic_canvas", "route_canvas"):
+            if hasattr(self, canvas_name):
+                try:
+                    canvas = getattr(self, canvas_name)
+                    if canvas.winfo_exists():
+                        canvas.configure(bg=t["card"])
+                except Exception:
+                    pass
 
         if self._settings_win and self._settings_win.winfo_exists():
             self._settings_win.configure(bg=t["bg"])

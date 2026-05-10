@@ -197,9 +197,24 @@ def _set_tcp_opts(writer: asyncio.StreamWriter, buffer_size: int) -> None:
 def _ws_domains(cfg: LocalConfig, dc_id: int, is_media: bool) -> list[str]:
     if cfg.route_mode == "cloudflare":
         return cloudflare_kws_domains(dc_id, is_media, cfg.cf_domain)
+
+    kws = official_kws_domains(dc_id, is_media)
+    names = official_named_domains(dc_id, is_media)
+
     if cfg.domain_style == "names":
-        return official_named_domains(dc_id, is_media)
-    return official_kws_domains(dc_id, is_media)
+        preferred = names
+        fallback = kws
+    else:
+        preferred = kws
+        fallback = names
+
+    result: list[str] = []
+
+    for domain in preferred + fallback:
+        if domain not in result:
+            result.append(domain)
+
+    return result
 
 
 def _connect_candidates_for_domain(cfg: LocalConfig, domain: str) -> list[tuple[str, str, float]]:
@@ -297,6 +312,11 @@ async def _connect_telegram_ws(cfg: LocalConfig, dc_id: int, is_media: bool, rel
 
     raise TelegramWebSocketError("No WSS domains available")
 
+def _connect_host_for_domain(cfg: LocalConfig, dc_id: int, domain: str) -> str:
+    if cfg.route_mode == "telegram" and cfg.pin_telegram_ip:
+        return FLOWSEAL_WS_PIN_IP
+
+    return domain
 
 async def _bridge_ws_reencrypt(
     client: ClientIO,

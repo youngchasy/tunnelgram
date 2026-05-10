@@ -62,6 +62,8 @@ except Exception:
     Image = None
     ImageDraw = None
 
+if sys.platform == "darwin":
+    pystray = None
 
 WORKING_DEFAULT_SECRET = "0a341d255f8ce1d5fcaf894cc2ee523a"
 
@@ -2785,6 +2787,10 @@ class App(tk.Tk):
         return img
 
     def setup_tray_icon(self) -> None:
+        if sys.platform == "darwin":
+            self.tray_icon = None
+            return
+
         if pystray is None or Image is None or ImageDraw is None:
             self.tray_icon = None
             return

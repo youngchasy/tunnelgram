@@ -1,0 +1,145 @@
+name: Build release binaries
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            os: windows-latest
+            archive: tunnelgram-windows-x64.zip
+
+          - name: linux-x64
+            os: ubuntu-latest
+            archive: tunnelgram-linux-x64.tar.gz
+
+          - name: macos
+            os: macos-latest
+            archive: tunnelgram-macos.zip
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Linux system packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install "pyinstaller>=6.0"
+
+      - name: Compile Python files
+        run: |
+          python -m compileall tunnelgram
+          python -m py_compile tunnelgram_app.py
+
+      - name: Build Windows executable
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pyinstaller `
+            --noconfirm `
+            --clean `
+            --onefile `
+            --windowed `
+            --name tunnelgram `
+            --icon assets/tunnelgram.ico `
+            --add-data "assets;assets" `
+            tunnelgram_app.py
+
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item dist/tunnelgram.exe release/tunnelgram.exe
+          if (Test-Path README.md) { Copy-Item README.md release/README.md }
+          if (Test-Path LICENSE) { Copy-Item LICENSE release/LICENSE }
+          Compress-Archive -Path release/* -DestinationPath "${{ matrix.archive }}" -Force
+
+      - name: Build Linux executable
+        if: runner.os == 'Linux'
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name tunnelgram \
+            --add-data "assets:assets" \
+            tunnelgram_app.py
+
+          mkdir -p release
+          cp dist/tunnelgram release/tunnelgram
+          chmod +x release/tunnelgram
+          [ -f README.md ] && cp README.md release/README.md || true
+          [ -f LICENSE ] && cp LICENSE release/LICENSE || true
+          tar -czf "${{ matrix.archive }}" -C release .
+
+      - name: Build macOS app
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onedir \
+            --windowed \
+            --name tunnelgram \
+            --add-data "assets:assets" \
+            tunnelgram_app.py
+
+          mkdir -p release
+
+          if [ -d "dist/tunnelgram.app" ]; then
+            cp -R dist/tunnelgram.app release/tunnelgram.app
+            [ -f README.md ] && cp README.md release/README.md || true
+            [ -f LICENSE ] && cp LICENSE release/LICENSE || true
+            ditto -c -k --sequesterRsrc --keepParent release "${{ matrix.archive }}"
+          else
+            cp -R dist/tunnelgram release/tunnelgram
+            [ -f README.md ] && cp README.md release/README.md || true
+            [ -f LICENSE ] && cp LICENSE release/LICENSE || true
+            ditto -c -k --sequesterRsrc --keepParent release "${{ matrix.archive }}"
+          fi
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+
+          gh release view "$TAG" >/dev/null 2>&1 || \
+            gh release create "$TAG" \
+              --title "tunnelgram $TAG" \
+              --notes "Automated release build for $TAG."
+
+          gh release upload "$TAG" "${{ matrix.archive }}" --clobber

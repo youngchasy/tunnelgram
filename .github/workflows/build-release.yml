@@ -110,6 +110,8 @@ jobs:
             --add-data "assets:assets" \
             tunnelgram_app.py
 
+          codesign --force --deep --sign - "dist/tunnelgram.app"
+
           mkdir -p release
 
           if [ -d "dist/tunnelgram.app" ]; then

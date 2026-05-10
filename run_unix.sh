@@ -5,6 +5,7 @@ cd "$(dirname "$0")"
 
 APP_NAME="tunnelgram"
 VENV_DIR=".venv"
+VENV_PY="$VENV_DIR/bin/python"
 
 echo "=================================================="
 echo "  tunnelgram - setup and run"
@@ -35,9 +36,7 @@ find_python() {
   echo ""
 }
 
-PYTHON_CMD="$(find_python)"
-
-if [ -z "$PYTHON_CMD" ]; then
+print_python_help() {
   echo "Python 3 was not found."
   echo
 
@@ -64,19 +63,9 @@ if [ -z "$PYTHON_CMD" ]; then
   else
     echo "Install Python 3 and try again."
   fi
+}
 
-  exit 1
-fi
-
-echo "Found Python:"
-"$PYTHON_CMD" --version
-echo
-
-echo "Checking tkinter..."
-if ! "$PYTHON_CMD" - <<'PY'
-import tkinter
-PY
-then
+print_tkinter_help() {
   echo
   echo "tkinter is missing. tunnelgram GUI requires tkinter."
   echo
@@ -95,8 +84,32 @@ then
   elif [ "$OS_NAME" = "macos" ]; then
     echo "Install Python from python.org, then try again:"
     echo "  https://www.python.org/downloads/macos/"
+    echo
+    echo "Or try Homebrew Python:"
+    echo "  brew install python"
   fi
+}
 
+check_tkinter() {
+  "$1" - <<'PY'
+import tkinter
+PY
+}
+
+PYTHON_CMD="$(find_python)"
+
+if [ -z "$PYTHON_CMD" ]; then
+  print_python_help
+  exit 1
+fi
+
+echo "Found Python:"
+"$PYTHON_CMD" --version
+echo
+
+echo "Checking tkinter in system Python..."
+if ! check_tkinter "$PYTHON_CMD"; then
+  print_tkinter_help
   exit 1
 fi
 
@@ -108,12 +121,21 @@ if [ "$OS_NAME" = "linux" ]; then
   fi
 fi
 
-if [ ! -f "$VENV_DIR/bin/python" ]; then
+if [ ! -f "$VENV_PY" ]; then
   echo "Creating virtual environment..."
   "$PYTHON_CMD" -m venv "$VENV_DIR"
 fi
 
-VENV_PY="$VENV_DIR/bin/python"
+echo "Checking tkinter in virtual environment..."
+if ! check_tkinter "$VENV_PY"; then
+  print_tkinter_help
+  echo
+  echo "The virtual environment was created, but tkinter is not available inside it."
+  echo "Remove .venv after installing tkinter, then run this script again:"
+  echo "  rm -rf .venv"
+  echo "  ./run_unix.sh"
+  exit 1
+fi
 
 echo "Upgrading pip..."
 "$VENV_PY" -m pip install --upgrade pip
@@ -121,6 +143,13 @@ echo "Upgrading pip..."
 echo
 echo "Installing dependencies..."
 "$VENV_PY" -m pip install -r requirements.txt
+
+echo
+echo "Checking Python files..."
+"$VENV_PY" -m compileall tunnelgram
+if [ -f "tunnelgram_app.py" ]; then
+  "$VENV_PY" -m py_compile tunnelgram_app.py
+fi
 
 echo
 echo "Starting tunnelgram..."

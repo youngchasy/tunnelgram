@@ -13,6 +13,9 @@ import socket
 import ctypes
 import plistlib
 import stat
+import shutil
+import urllib.error
+import urllib.request
 from pathlib import Path
 import tkinter as tk
 from tkinter import END, BooleanVar, StringVar, Toplevel, messagebox, filedialog
@@ -22,8 +25,14 @@ from .faketls import build_faketls_secret_hex, hostname_to_hex
 from .mtproto import generate_secret_hex, telegram_link, validate_secret_hex
 
 APP_NAME = "tunnelgram"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+GITHUB_REPO = "youngchasy/tunnelgram"
+GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+
+GITHUB_REPO_URL = f"https://github.com/{GITHUB_REPO}"
+GITHUB_RELEASES_URL = f"{GITHUB_REPO_URL}/releases"
+GITHUB_LATEST_RELEASE_URL = f"{GITHUB_REPO_URL}/releases/latest"
 
 AUTOSTART_REG_NAME = "tunnelgram"
 AUTOSTART_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
@@ -45,10 +54,10 @@ MACOS_PLIST_FILE = MACOS_LAUNCH_AGENTS_DIR / "com.tunnelgram.app.plist"
 
 UNIX_AUTOSTART_SCRIPT = PROJECT_ROOT / "run_unix_autostart.sh"
 
-try:  # optional tray dependencies
-    import pystray  # type: ignore
-    from PIL import Image, ImageDraw  # type: ignore
-except Exception:  # pragma: no cover
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except Exception:
     pystray = None
     Image = None
     ImageDraw = None
@@ -111,19 +120,312 @@ THEMES = {
     },
 }
 
+LANGUAGES = {"ru", "en"}
+
+TRANSLATIONS = {
+    "ru": {
+        "already_running_message": "tunnelgram уже запущен.\n\nЧтобы открыть окно, найди иконку приложения в трее.",
+
+        "theme_button": "Тема",
+        "language_switched": "Язык переключён на русский.",
+
+        "status_stopped": "Остановлен",
+        "status_waiting_start": "Ждёт запуска",
+        "status_waiting_telegram": "Жду Telegram",
+        "status_running": "Работает",
+        "status_connected": "Подключён",
+        "status_secret_rejected": "Secret не принят",
+        "status_network_problem": "Проблема сети",
+        "status_wss_available": "WSS доступен",
+        "status_wss_not_found": "WSS не найден",
+        "status_check_error": "Ошибка проверки",
+        "status_no_connections": "Нет подключений",
+        "status_checking_wss": "Проверяю WSS…",
+
+        "toggle_on": "Включить",
+        "toggle_off": "Выключить",
+
+        "enabled_short": "вкл",
+        "disabled_short": "выкл",
+        "enabled": "включён",
+        "disabled": "выключен",
+
+        "proxy": "Прокси",
+        "telegram": "Telegram",
+        "traffic": "Трафик",
+        "link": "Ссылка",
+        "settings": "Настройки",
+        "logs": "Логи",
+
+        "minimize_to_tray": "Свернуть в трей",
+        "check_connection": "Проверить соединение",
+        "export": "Экспорт логов",
+        "clear_logs": "Очистить логи",
+
+        "ready_log": "Готово. Нажми «Включить», затем «Telegram». Рекомендуется изменить стандартные настройки, если с первого раза ничего не работает.",
+
+        "settings_window_title": "Настройки tunnelgram",
+        "basic": "Основное",
+        "address": "Адрес",
+        "port": "Порт",
+        "secret_label": "Secret (рекомендуется изменить)",
+        "secret_type_label": "Тип secret (дефолт Fake TLS)",
+        "sni": "SNI",
+        "autostart_label": "Запускать вместе с системой",
+        "autostart_hint": "по умолчанию выключено",
+
+        "route": "Маршрут",
+        "mode_label": "Режим (дефолт Direct WSS)",
+        "cf_hint": "только если есть свой домен в Cloudflare",
+        "cf_suffix": "Cloudflare suffix (вводить если выбран режим Cloudflare DNS)",
+        "domains_label": "Домены (дефолт kws)",
+        "dc_names": "имена DC",
+
+        "save": "Сохранить",
+        "close": "Закрыть",
+
+        "settings_saved": "Настройки сохранены.",
+        "autostart_system": "Автозапуск системы: {state}",
+
+        "logs_empty": "Логи пустые, экспортировать нечего.",
+        "export_logs_title": "Экспорт логов",
+        "save_logs_failed": "Не удалось сохранить логи:\n\n{error}",
+        "logs_exported": "Логи экспортированы: {path}",
+        "logs_cleared": "Логи очищены.",
+        "hidden_wss_events": "Скрыто {count} коротких WSS-событий.",
+
+        "port_must_be_number": "Порт должен быть числом",
+        "port_range": "Порт должен быть от 1 до 65535",
+        "faketls_sni_required": "Для Fake TLS нужен SNI-домен, например www.google.com",
+        "cf_suffix_required": "Для Cloudflare DNS нужен suffix, например example.com",
+
+        "full_secret_copied": "Полный secret скопирован.",
+        "tg_link_copied": "Ссылка tg:// скопирована.",
+        "open_telegram_log": "Открываю Telegram. Если окно не развернулось автоматически, разверни его вручную и согласись на добавление локального прокси.",
+        "open_telegram_failed": "Не удалось открыть Telegram автоматически.\n\nСсылка скопирована в буфер обмена — вставь её вручную в Telegram Desktop.",
+        "new_secret_generated": "Сгенерирован новый base secret.",
+
+        "proxy_already_started": "Прокси уже запущен.",
+        "proxy_started": "Прокси запущен.",
+        "proxy_start_failed": "Не удалось запустить прокси: {error}",
+        "proxy_not_started": "Прокси не запущен.",
+        "proxy_stopped": "Прокси остановлен.",
+
+        "check_wss_log": "Проверяю WSS endpoint’ы…",
+
+        "tray_show_hide": "Показать / скрыть",
+        "tray_show_window": "Показать окно",
+        "tray_toggle_proxy": "Включить / выключить",
+        "tray_open_telegram": "Открыть Telegram",
+        "tray_copy_tg": "Скопировать tg://",
+        "tray_exit": "Выход",
+        "tray_xorg_warn": "Linux tray работает через Xorg backend: меню может быть ограничено, ЛКМ должен возвращать окно.",
+        "tray_backend": "Linux tray backend: {backend}; menu={menu}; default={default}",
+        "tray_unavailable": "Трей недоступен.",
+        "tray_hidden": "Окно свёрнуто в трей. Нажми на иконку tunnelgram, чтобы вернуть окно.",
+
+        "updates": "Обновления",
+        "check_updates_label": "Проверять обновления при запуске",
+        "check_updates_hint": "использует GitHub Releases",
+        "check_updates_now": "Проверить обновления",
+        "update_status_idle": "Обновления ещё не проверялись.",
+        "update_status_checking": "Проверяю обновления…",
+        "update_status_latest": "Установлена последняя версия.",
+        "update_status_available": "Доступна новая версия: {version}",
+        "update_status_later": "Не удалось проверить обновления. Попробуйте проверить обновления позже.",
+        "update_status_not_found": "Релиз не найден. Проверь GitHub repo и опубликованный release.",
+        "update_status_bad_response": "GitHub вернул непонятный ответ. Попробуйте позже.",
+        "update_open_release_question": "Доступна новая версия tunnelgram: {latest}\n\nТекущая версия: v{current}\n\nОткрыть страницу релиза на GitHub?",
+
+        "about": "О программе",
+        "about_title": "О tunnelgram",
+        "about_description": "Локальный MTProto-прокси для Telegram Desktop через Telegram WSS endpoint’ы.",
+        "about_version": "Версия: v{version}",
+        "about_repo": "GitHub: {repo}",
+        "about_license": "Лицензия: MIT",
+        "open_github": "Открыть GitHub",
+        "open_releases": "Открыть Releases",
+        "open_latest_release": "Открыть последний релиз",
+        "copy_version": "Скопировать версию",
+        "version_copied": "Версия скопирована.",
+        "open_config_folder": "Открыть папку конфига",
+        "config_folder_opened": "Папка конфига открыта.",
+        "config_folder_open_failed": "Не удалось открыть папку конфига:\n\n{error}",
+
+        "reset_settings": "Сбросить настройки",
+        "reset_settings_title": "Сбросить настройки?",
+        "reset_settings_message": "Это вернёт настройки подключения к значениям по умолчанию.\n\nЯзык, тема и настройка проверки обновлений будут сохранены.",
+        "settings_reset_done": "Настройки сброшены.",
+
+        "text_files": "Text files",
+        "log_files": "Log files",
+        "all_files": "All files",
+    },
+
+    "en": {
+        "already_running_message": "tunnelgram is already running.\n\nTo open the window, use the app icon in the system tray.",
+
+        "theme_button": "Theme",
+        "language_switched": "Language switched to English.",
+
+        "status_stopped": "Stopped",
+        "status_waiting_start": "Waiting to start",
+        "status_waiting_telegram": "Waiting for Telegram",
+        "status_running": "Running",
+        "status_connected": "Connected",
+        "status_secret_rejected": "Secret rejected",
+        "status_network_problem": "Network problem",
+        "status_wss_available": "WSS available",
+        "status_wss_not_found": "WSS not found",
+        "status_check_error": "Check failed",
+        "status_no_connections": "No connections",
+        "status_checking_wss": "Checking WSS…",
+
+        "toggle_on": "Start",
+        "toggle_off": "Stop",
+
+        "enabled_short": "on",
+        "disabled_short": "off",
+        "enabled": "enabled",
+        "disabled": "disabled",
+
+        "proxy": "Proxy",
+        "telegram": "Telegram",
+        "traffic": "Traffic",
+        "link": "Link",
+        "settings": "Settings",
+        "logs": "Logs",
+
+        "minimize_to_tray": "Minimize to tray",
+        "check_connection": "Check connection",
+        "export": "Export logs",
+        "clear_logs": "Clear logs",
+
+        "ready_log": "Ready. Click “Start”, then “Telegram”. Change the default settings if it does not work on the first try.",
+
+        "settings_window_title": "tunnelgram settings",
+        "basic": "Basic",
+        "address": "Address",
+        "port": "Port",
+        "secret_label": "Secret (recommended to change)",
+        "secret_type_label": "Secret type (default: Fake TLS)",
+        "sni": "SNI",
+        "autostart_label": "Start with system",
+        "autostart_hint": "disabled by default",
+
+        "route": "Route",
+        "mode_label": "Mode (default: Direct WSS)",
+        "cf_hint": "only if you have your own Cloudflare domain",
+        "cf_suffix": "Cloudflare suffix (only for Cloudflare DNS mode)",
+        "domains_label": "Domains (default: kws)",
+        "dc_names": "DC names",
+
+        "save": "Save",
+        "close": "Close",
+
+        "settings_saved": "Settings saved.",
+        "autostart_system": "System autostart: {state}",
+
+        "logs_empty": "Logs are empty, nothing to export.",
+        "export_logs_title": "Export logs",
+        "save_logs_failed": "Could not save logs:\n\n{error}",
+        "logs_exported": "Logs exported: {path}",
+        "logs_cleared": "Logs cleared.",
+        "hidden_wss_events": "Hidden {count} short WSS events.",
+
+        "port_must_be_number": "Port must be a number",
+        "port_range": "Port must be between 1 and 65535",
+        "faketls_sni_required": "Fake TLS requires an SNI domain, for example www.google.com",
+        "cf_suffix_required": "Cloudflare DNS requires a suffix, for example example.com",
+
+        "full_secret_copied": "Full secret copied.",
+        "tg_link_copied": "tg:// link copied.",
+        "open_telegram_log": "Opening Telegram. If the window does not appear automatically, open Telegram manually and accept adding the local proxy.",
+        "open_telegram_failed": "Could not open Telegram automatically.\n\nThe link was copied to the clipboard — paste it manually into Telegram Desktop.",
+        "new_secret_generated": "Generated a new base secret.",
+
+        "proxy_already_started": "Proxy is already running.",
+        "proxy_started": "Proxy started.",
+        "proxy_start_failed": "Could not start proxy: {error}",
+        "proxy_not_started": "Proxy is not running.",
+        "proxy_stopped": "Proxy stopped.",
+
+        "check_wss_log": "Checking WSS endpoints…",
+
+        "tray_show_hide": "Show / hide",
+        "tray_show_window": "Show window",
+        "tray_toggle_proxy": "Start / stop",
+        "tray_open_telegram": "Open Telegram",
+        "tray_copy_tg": "Copy tg://",
+        "tray_exit": "Exit",
+        "tray_xorg_warn": "Linux tray is using the Xorg backend: the menu may be limited, left-click should restore the window.",
+        "tray_backend": "Linux tray backend: {backend}; menu={menu}; default={default}",
+        "tray_unavailable": "System tray is unavailable.",
+        "tray_hidden": "Window minimized to tray. Click the tunnelgram icon to restore it.",
+
+        "updates": "Updates",
+        "check_updates_label": "Check for updates on startup",
+        "check_updates_hint": "uses GitHub Releases",
+        "check_updates_now": "Check updates",
+        "update_status_idle": "Updates have not been checked yet.",
+        "update_status_checking": "Checking for updates…",
+        "update_status_latest": "You are using the latest version.",
+        "update_status_available": "New version available: {version}",
+        "update_status_later": "Could not check for updates. Try checking again later.",
+        "update_status_not_found": "Release not found. Check the GitHub repo and published release.",
+        "update_status_bad_response": "GitHub returned an unexpected response. Try again later.",
+        "update_open_release_question": "A new tunnelgram version is available: {latest}\n\nCurrent version: v{current}\n\nOpen the GitHub release page?",
+
+        "about": "About",
+        "about_title": "About tunnelgram",
+        "about_description": "Local MTProto proxy for Telegram Desktop through Telegram WSS endpoints.",
+        "about_version": "Version: v{version}",
+        "about_repo": "GitHub: {repo}",
+        "about_license": "License: MIT",
+        "open_github": "Open GitHub",
+        "open_releases": "Open Releases",
+        "open_latest_release": "Open latest release",
+        "copy_version": "Copy version",
+        "version_copied": "Version copied.",
+        "open_config_folder": "Open config folder",
+        "config_folder_opened": "Config folder opened.",
+        "config_folder_open_failed": "Could not open config folder:\n\n{error}",
+
+        "reset_settings": "Reset settings",
+        "reset_settings_title": "Reset settings?",
+        "reset_settings_message": "This will restore connection settings to their defaults.\n\nLanguage, theme, and update-check settings will be kept.",
+        "settings_reset_done": "Settings reset.",
+
+        "text_files": "Text files",
+        "log_files": "Log files",
+        "all_files": "All files",
+    },
+}
+
+
+def tr_text(key: str, language: str = "en", **kwargs) -> str:
+    lang = language if language in TRANSLATIONS else "en"
+    text = TRANSLATIONS.get(lang, {}).get(key) or TRANSLATIONS["en"].get(key) or key
+
+    if kwargs:
+        try:
+            return text.format(**kwargs)
+        except Exception:
+            return text
+
+    return text
 
 def app_dir() -> Path:
     if os.name == "nt" and os.getenv("APPDATA"):
-        return Path(os.getenv("APPDATA", "")) / "TunnelGram"
+        return Path(os.getenv("APPDATA", "")) / "tunnelgram"
     return Path.home() / ".tunnelgram"
 
 
 CONFIG_PATH = app_dir() / "config.json"
 
-# Read old config once so users do not lose working settings after the rename.
 def old_config_path() -> Path:
     if os.name == "nt" and os.getenv("APPDATA"):
-        return Path(os.getenv("APPDATA", "")) / "TunnelGramDirect" / "config.json"
+        return Path(os.getenv("APPDATA", "")) / "TunnelGram" / "config.json"
     return Path.home() / ".tunnelgram-direct" / "config.json"
 
 
@@ -139,12 +441,20 @@ DEFAULT_CONFIG = {
     "domain_style": "kws",
     "direct_fallback": False,
     "theme": "dark",
+    "language": "ru",
+    "check_updates": True,
     "autostart": False,
 }
 
+class UpdateCheckNetworkError(Exception):
+    pass
 
-def fmt_bool(value: bool) -> str:
-    return "вкл" if value else "выкл"
+
+class UpdateCheckNotFoundError(Exception):
+    pass
+
+def fmt_bool(value: bool, language: str = "en") -> str:
+    return tr_text("enabled_short" if value else "disabled_short", language)
 
 def setup_windows_app_id() -> None:
     if os.name != "nt":
@@ -155,9 +465,48 @@ def setup_windows_app_id() -> None:
     except Exception:
         pass
 
+def is_frozen_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def proxy_command() -> list[str]:
+    if is_frozen_app():
+        return [sys.executable, "--proxy"]
+
+    return [python_console_executable(), "-u", "-m", "tunnelgram.local_proxy"]
+
+def subprocess_window_kwargs() -> dict:
+    if os.name != "nt":
+        return {}
+
+    return {
+        "creationflags": subprocess.CREATE_NO_WINDOW,
+    }
+
+def python_console_executable() -> str:
+    exe = Path(sys.executable)
+
+    if os.name == "nt" and exe.name.lower() == "pythonw.exe":
+        python_exe = exe.with_name("python.exe")
+        if python_exe.exists():
+            return str(python_exe)
+
+    return sys.executable
+
+def diagnostics_command() -> list[str]:
+    if is_frozen_app():
+        return [sys.executable, "--diagnostics"]
+
+    return [python_console_executable(), "-u", "-m", "tunnelgram.diagnostics"]
+
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+
+        cfg = self.load_config()
+        initial_language = cfg.get("language", DEFAULT_CONFIG["language"])
+        if initial_language not in LANGUAGES:
+            initial_language = DEFAULT_CONFIG["language"]
 
         self._instance_socket: socket.socket | None = None
 
@@ -165,8 +514,7 @@ class App(tk.Tk):
             self.withdraw()
             messagebox.showinfo(
                 APP_NAME,
-                "tunnelgram уже запущен.\n\n"
-                "Чтобы открыть окно, найди иконку приложения в трее.",
+                tr_text("already_running_message", initial_language),
             )
             self.destroy()
             raise SystemExit(0)
@@ -180,6 +528,7 @@ class App(tk.Tk):
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.tray_icon = None
         self.tray_thread: threading.Thread | None = None
+        self._hidden_to_tray = False
         self._quitting = False
         self._settings_win: Toplevel | None = None
         self._current_cfg: dict = {}
@@ -193,7 +542,6 @@ class App(tk.Tk):
         self._log_prune_every = 25
         self._log_lines_since_prune = 0
 
-        cfg = self.load_config()
         self.listen_host = StringVar(value=cfg.get("listen_host", DEFAULT_CONFIG["listen_host"]))
         self.listen_port = StringVar(value=str(cfg.get("listen_port", DEFAULT_CONFIG["listen_port"])))
         self.secret = StringVar(value=cfg.get("secret", DEFAULT_CONFIG["secret"]))
@@ -204,21 +552,32 @@ class App(tk.Tk):
         self.pin_telegram_ip = BooleanVar(value=bool(cfg.get("pin_telegram_ip", DEFAULT_CONFIG["pin_telegram_ip"])))
         self.domain_style = StringVar(value=cfg.get("domain_style", DEFAULT_CONFIG["domain_style"]))
         self.direct_fallback = BooleanVar(value=bool(cfg.get("direct_fallback", DEFAULT_CONFIG["direct_fallback"])))
+        self.check_updates = BooleanVar(value=bool(cfg.get("check_updates", DEFAULT_CONFIG["check_updates"])))
         self.theme_name = StringVar(value=cfg.get("theme", DEFAULT_CONFIG["theme"]) if cfg.get("theme", "") in THEMES else "dark")
-        self.autostart_windows = BooleanVar(
-            value=bool(cfg.get("autostart_windows", DEFAULT_CONFIG["autostart_windows"]))
+        self.autostart = BooleanVar(
+            value=bool(cfg.get("autostart", cfg.get("autostart_windows", DEFAULT_CONFIG["autostart"])))
         )
 
-        self.status = StringVar(value="Остановлен")
-        self.telegram_status = StringVar(value="Ждёт запуска")
+        self.language = StringVar(value=initial_language)
+        self.theme_button_text = StringVar()
+        self.language_button_text = StringVar()
+
+        self.status = StringVar(value=self.tr("status_stopped"))
+        self.telegram_status = StringVar(value=self.tr("status_waiting_start"))
         self.active_status = StringVar(value="0")
         self.traffic_status = StringVar(value="↑ 0B   ↓ 0B")
         self.errors_status = StringVar(value="0")
         self.quick_settings = StringVar(value="")
         self.full_secret = StringVar(value="")
-        self.toggle_text = StringVar(value="Включить")
+        self.toggle_text = StringVar(value=self.tr("toggle_on"))
+
+        self.update_status = StringVar(value=self.tr("update_status_idle"))
+        self._update_status_key = "update_status_idle"
+        self._update_status_kwargs: dict = {}
+        self._latest_release_url = ""
 
         self.theme = THEMES.get(self.theme_name.get(), THEMES["dark"])
+        self.update_language_controls()
 
         self.create_widgets()
         self.apply_theme()
@@ -226,6 +585,7 @@ class App(tk.Tk):
         self.setup_tray_icon()
         self.after(150, self.drain_logs)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+        self.after(1500, self.check_updates_on_startup)
 
         for var in (
             self.listen_host, self.listen_port, self.secret, self.secret_mode,
@@ -234,15 +594,9 @@ class App(tk.Tk):
             var.trace_add("write", lambda *_: self.refresh_summary())
         self.pin_telegram_ip.trace_add("write", lambda *_: self.refresh_summary())
         self.direct_fallback.trace_add("write", lambda *_: self.refresh_summary())
+        self.language.trace_add("write", lambda *_: self.update_language_controls())
 
     def acquire_single_instance_lock(self) -> bool:
-        """
-        Не даёт запустить вторую копию tunnelgram.
-
-        Работает через локальный lock-сокет:
-        первая копия занимает 127.0.0.1:48173,
-        вторая копия не может занять этот же порт и закрывается.
-        """
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
         try:
@@ -273,10 +627,6 @@ class App(tk.Tk):
             self._instance_socket = None
 
     def ensure_unix_autostart_script(self) -> Path:
-        """
-        Создаёт run_unix_autostart.sh, если его нет.
-        Используется для Linux/macOS автозапуска.
-        """
         path = UNIX_AUTOSTART_SCRIPT
 
         if not path.exists():
@@ -409,8 +759,10 @@ class App(tk.Tk):
             "pin_telegram_ip": bool(self.pin_telegram_ip.get()),
             "domain_style": self.domain_style.get().strip() or "kws",
             "direct_fallback": bool(self.direct_fallback.get()),
+            "check_updates": bool(self.check_updates.get()),
             "theme": self.theme_name.get(),
-            "autostart_windows": bool(self.autostart_windows.get()),
+            "language": self.language.get() if self.language.get() in LANGUAGES else DEFAULT_CONFIG["language"],
+            "autostart": bool(self.autostart.get()),
         }
 
     def save_config(self, silent: bool = False) -> None:
@@ -425,18 +777,16 @@ class App(tk.Tk):
 
         self.refresh_summary()
         if not silent:
-            self.log("Настройки сохранены.", "ok")
-            if os.name == "nt":
-                self.log(
-                    "Автозапуск Windows: " + ("включён" if self.autostart_windows.get() else "выключен"),
-                    "ok" if self.autostart_windows.get() else "muted",
-                )
+            self.log(self.tr("settings_saved"), "ok")
+            self.log(
+                self.tr(
+                    "autostart_system",
+                    state=self.tr("enabled" if self.autostart.get() else "disabled"),
+                ),
+                "ok" if self.autostart.get() else "muted",
+            )
 
     def ensure_hidden_launcher(self) -> Path:
-        """
-        Создаёт run_hidden.vbs, если его нет.
-        Этот файл запускает GUI через pythonw.exe без консоли.
-        """
         path = PROJECT_ROOT / "run_hidden.vbs"
 
         if path.exists():
@@ -453,18 +803,11 @@ class App(tk.Tk):
 
 
     def windows_autostart_command(self) -> str:
-        """
-        Команда, которую Windows будет запускать при входе пользователя.
-        """
         launcher = self.ensure_hidden_launcher()
         return f'wscript.exe //B //Nologo "{launcher}"'
 
 
     def set_windows_autostart(self, enabled: bool) -> None:
-        """
-        Включает/выключает автозапуск через HKCU\\...\\Run.
-        Не требует прав администратора.
-        """
         if os.name != "nt":
             return
 
@@ -492,9 +835,6 @@ class App(tk.Tk):
 
 
     def is_windows_autostart_enabled(self) -> bool:
-        """
-        Проверяет, есть ли запись автозапуска в реестре.
-        """
         if os.name != "nt":
             return False
 
@@ -516,16 +856,13 @@ class App(tk.Tk):
 
 
     def sync_windows_autostart(self) -> None:
-        """
-        Синхронизирует чекбокс из настроек с реестром Windows.
-        """
         if os.name != "nt":
             return
 
-        self.set_windows_autostart(bool(self.autostart_windows.get()))
+        self.set_windows_autostart(bool(self.autostart.get()))
 
     def sync_system_autostart(self) -> None:
-        enabled = bool(self.autostart_windows.get())
+        enabled = bool(self.autostart.get())
 
         if os.name == "nt":
             self.set_windows_autostart(enabled)
@@ -540,10 +877,6 @@ class App(tk.Tk):
             return
 
     def setup_window_icon(self) -> None:
-        """
-        Ставит иконку окна и панели задач.
-        На Windows лучше всего работает .ico.
-        """
         try:
             if os.name == "nt" and ICON_ICO.exists():
                 self.iconbitmap(default=str(ICON_ICO))
@@ -555,11 +888,113 @@ class App(tk.Tk):
             if ICON_PNG.exists():
                 img = tk.PhotoImage(file=str(ICON_PNG))
                 self.iconphoto(True, img)
-                self._window_icon_ref = img  # держим ссылку, чтобы Tkinter не удалил картинку
+                self._window_icon_ref = img
         except Exception:
             pass
 
     # ── UI helpers ─────────────────────────────────────────────────────────
+
+    # ── i18n ────────────────────────────────────────────────────────────────
+    def tr(self, key: str, **kwargs) -> str:
+        language = self.language.get() if hasattr(self, "language") else DEFAULT_CONFIG["language"]
+        return tr_text(key, language, **kwargs)
+
+
+    def update_language_controls(self) -> None:
+        if hasattr(self, "theme_button_text"):
+            self.theme_button_text.set(self.tr("theme_button"))
+
+        if hasattr(self, "language_button_text"):
+            self.language_button_text.set("RU" if self.language.get() == "en" else "EN")
+
+
+    def retranslate_current_state(self) -> None:
+        status_keys = [
+            "status_stopped",
+            "status_waiting_start",
+            "status_waiting_telegram",
+            "status_running",
+            "status_connected",
+            "status_secret_rejected",
+            "status_network_problem",
+            "status_wss_available",
+            "status_wss_not_found",
+            "status_check_error",
+            "status_no_connections",
+            "status_checking_wss",
+        ]
+
+        def translate_var(var: StringVar, keys: list[str]) -> None:
+            current = var.get()
+
+            for key in keys:
+                values = {translations.get(key) for translations in TRANSLATIONS.values()}
+                if current in values:
+                    var.set(self.tr(key))
+                    return
+
+        translate_var(self.status, status_keys)
+        translate_var(self.telegram_status, status_keys)
+        translate_var(self.toggle_text, ["toggle_on", "toggle_off"])
+
+        if hasattr(self, "_update_status_key"):
+            self.set_update_status(self._update_status_key, **self._update_status_kwargs)
+
+
+    def toggle_language(self) -> None:
+        old_log_content = ""
+
+        try:
+            if hasattr(self, "log_text") and self.log_text.winfo_exists():
+                old_log_content = self.log_text.get("1.0", "end-1c")
+        except Exception:
+            old_log_content = ""
+
+        self.language.set("ru" if self.language.get() == "en" else "en")
+        self.update_language_controls()
+        self.retranslate_current_state()
+        self.refresh_summary()
+        self.set_update_status(self._update_status_key, **self._update_status_kwargs)
+
+        try:
+            if self._settings_win and self._settings_win.winfo_exists():
+                self._settings_win.destroy()
+        except Exception:
+            pass
+
+        self._settings_win = None
+
+        try:
+            if hasattr(self, "root_frame") and self.root_frame.winfo_exists():
+                self.root_frame.destroy()
+        except Exception:
+            pass
+
+        self._theme_widgets.clear()
+        self._buttons.clear()
+        self._cards.clear()
+        self.status_value_labels = []
+        self.status_title_labels = []
+
+        self.create_widgets()
+        self.apply_theme()
+        self.refresh_summary()
+
+        if old_log_content:
+            try:
+                self.log_text.delete("1.0", END)
+                self.log_text.insert(END, old_log_content.rstrip() + "\n")
+                self.log_text.see(END)
+            except Exception:
+                pass
+
+        self.log(self.tr("language_switched"), "ok")
+
+        try:
+            self.save_config(silent=True)
+        except Exception:
+            pass
+
     def watch(self, widget: tk.Widget, bg_key: str, fg_key: str | None = None) -> tk.Widget:
         self._theme_widgets.append((widget, bg_key, fg_key))
         return widget
@@ -574,7 +1009,7 @@ class App(tk.Tk):
             justify=kw.pop("justify", "left"),
             **kw,
         )
-        return self.watch(label, bg, role)  # type: ignore[return-value]
+        return self.watch(label, bg, role)
 
     def make_button(
         self,
@@ -617,13 +1052,9 @@ class App(tk.Tk):
             readonlybackground=THEMES[self.theme_name.get()].get("entry", "#ffffff"),
             state="readonly" if readonly else "normal",
         )
-        return self.watch(entry, "entry", "text")  # type: ignore[return-value]
+        return self.watch(entry, "entry", "text")
     
     def split_label_hint(self, text: str) -> tuple[str, str]:
-        """
-        'Secret (рекомендуется изменить)' -> ('Secret', 'рекомендуется изменить')
-        'Адрес' -> ('Адрес', '')
-        """
         m = re.fullmatch(r"\s*(.*?)\s*\((.*?)\)\s*", text)
         if not m:
             return text, ""
@@ -693,8 +1124,23 @@ class App(tk.Tk):
         right = tk.Frame(header, bd=0)
         self.watch(right, "bg")
         right.grid(row=0, column=1, sticky="e")
-        self.theme_btn = self.make_button(right, text="Тема", command=self.toggle_theme, kind="secondary", width=10)
-        self.theme_btn.pack(anchor="e")
+        self.language_btn = self.make_button(
+            right,
+            textvariable=self.language_button_text,
+            command=self.toggle_language,
+            kind="secondary",
+            width=6,
+        )
+        self.language_btn.pack(side="right", anchor="e", padx=(10, 0))
+
+        self.theme_btn = self.make_button(
+            right,
+            textvariable=self.theme_button_text,
+            command=self.toggle_theme,
+            kind="secondary",
+            width=10,
+        )
+        self.theme_btn.pack(side="right", anchor="e")
 
     def create_status_cards(self) -> None:
         area = tk.Frame(self.root_frame, bd=0)
@@ -702,9 +1148,9 @@ class App(tk.Tk):
         area.grid(row=1, column=0, sticky="ew", pady=(30, 14))
 
         cards = [
-            (0, "Прокси", self.status),
-            (1, "Telegram", self.telegram_status),
-            (2, "Трафик", self.traffic_status),
+            (0, self.tr("proxy"), self.status),
+            (1, self.tr("telegram"), self.telegram_status),
+            (2, self.tr("traffic"), self.traffic_status),
         ]
 
         for i in range(len(cards)):
@@ -743,8 +1189,8 @@ class App(tk.Tk):
         for i in range(3):
             actions.columnconfigure(i, weight=1)
         self.make_button(actions, text="Telegram", command=self.open_tg_link, kind="secondary", width=8).grid(row=0, column=0, padx=(0, 10), ipady=2)
-        self.make_button(actions, text="Ссылка", command=self.copy_tg_link, kind="secondary", width=6).grid(row=0, column=1, padx=(0, 10), ipady=2)
-        self.make_button(actions, text="Настройки", command=self.open_settings, kind="secondary", width=10).grid(row=0, column=2, ipady=2)
+        self.make_button(actions, text=self.tr("link"), command=self.copy_tg_link, kind="secondary", width=6).grid(row=0, column=1, padx=(0, 10), ipady=2)
+        self.make_button(actions, text=self.tr("settings"), command=self.open_settings, kind="secondary", width=10).grid(row=0, column=2, ipady=2)
 
     def create_log_card(self) -> None:
         card = self.make_section(self.root_frame)
@@ -756,22 +1202,22 @@ class App(tk.Tk):
         self.watch(head, "card")
         head.grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 10))
         head.columnconfigure(1, weight=1)
-        self.make_label(head, "Логи", role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, sticky="w")
+        self.make_label(head, self.tr("logs"), role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, sticky="w")
 
         buttons = tk.Frame(head, bd=0)
         self.watch(buttons, "card")
         buttons.grid(row=0, column=2, sticky="e")
         if pystray is not None:
-            self.make_button(buttons, text="Свернуть в трей", command=self.hide_to_tray, kind="secondary", width=12).pack(side="left", padx=(0, 10))
-        self.make_button(buttons, text="Проверить соединение", command=self.check_wss, kind="secondary", width=18).pack(side="left", padx=(0, 10))
+            self.make_button(buttons, text=self.tr("minimize_to_tray"), command=self.hide_to_tray, kind="secondary", width=12).pack(side="left", padx=(0, 10))
+        self.make_button(buttons, text=self.tr("check_connection"), command=self.check_wss, kind="secondary", width=18).pack(side="left", padx=(0, 10))
         self.make_button(
             buttons,
-            text="Экспорт",
+            text=self.tr("export"),
             command=self.export_logs,
             kind="secondary",
             width=10,
         ).pack(side="left", padx=(0, 8))
-        self.make_button(buttons, text="Очистить логи", command=self.clear_logs, kind="secondary", width=10).pack(side="left")
+        self.make_button(buttons, text=self.tr("clear_logs"), command=self.clear_logs, kind="secondary", width=10).pack(side="left")
 
         log_wrap = tk.Frame(card, bd=0)
         self.watch(log_wrap, "card")
@@ -784,7 +1230,7 @@ class App(tk.Tk):
         self.log_text.tag_config("warn", foreground="#fde68a")
         self.log_text.tag_config("err", foreground="#fca5a5")
         self.log_text.tag_config("muted", foreground="#a8a29e")
-        self.log("Готово. Нажми «Включить», затем «Telegram». (рекомендуется изменить стандартные настройки, в том случае если с первого раза ничего не работает)", "ok")
+        self.log(self.tr("ready_log"), "ok")
 
     def open_settings(self) -> None:
         if self._settings_win and self._settings_win.winfo_exists():
@@ -794,7 +1240,7 @@ class App(tk.Tk):
 
         win = Toplevel(self)
         self._settings_win = win
-        win.title("Настройки tunnelgram")
+        win.title(self.tr("settings_window_title"))
         win.geometry("860x650")
         win.minsize(860, 650)
         win.transient(self)
@@ -807,7 +1253,35 @@ class App(tk.Tk):
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(2, weight=1)
 
-        self.make_label(frame, "Настройки", role="text", size=20, weight="bold", bg="bg").grid(row=0, column=0, sticky="w")
+        self.make_label(frame, self.tr("settings"), role="text", size=20, weight="bold", bg="bg").grid(row=0, column=0, sticky="w")
+
+        top_actions = tk.Frame(frame, bd=0)
+        self.watch(top_actions, "bg")
+        top_actions.grid(row=1, column=0, sticky="ew", pady=(12, 16))
+
+        self.make_button(
+            top_actions,
+            text=self.tr("about"),
+            command=self.open_about_window,
+            kind="secondary",
+            width=14,
+        ).pack(side="left", padx=(0, 10))
+
+        self.make_button(
+            top_actions,
+            text=self.tr("open_config_folder"),
+            command=self.open_config_folder,
+            kind="secondary",
+            width=18,
+        ).pack(side="left", padx=(0, 10))
+
+        self.make_button(
+            top_actions,
+            text=self.tr("reset_settings"),
+            command=self.reset_settings,
+            kind="danger",
+            width=16,
+        ).pack(side="left")
 
         body = tk.Frame(frame, bd=0)
         self.watch(body, "bg")
@@ -815,28 +1289,78 @@ class App(tk.Tk):
         body.columnconfigure(0, weight=1, uniform="settings_columns")
         body.columnconfigure(1, weight=1, uniform="settings_columns")
 
-        basic = self.make_section(body)
-        basic.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        basic_card = self.make_section(body)
+        basic_card.grid(row=0, column=0, sticky="nsew", padx=(0, 12))
+
+        basic_card.grid_propagate(False)
+        basic_card.configure(height=680)
+
+        basic_card.rowconfigure(0, weight=1)
+        basic_card.columnconfigure(0, weight=1)
+
+        basic_canvas = tk.Canvas(
+            basic_card,
+            bd=0,
+            highlightthickness=0,
+            relief="flat",
+            bg=self.theme["card"],
+        )
+        basic_scrollbar = tk.Scrollbar(
+            basic_card,
+            orient="vertical",
+            command=basic_canvas.yview,
+        )
+        basic_canvas.configure(yscrollcommand=basic_scrollbar.set)
+
+        basic_canvas.grid(row=0, column=0, sticky="nsew")
+        basic_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        basic = tk.Frame(basic_canvas, bd=0, bg=self.theme["card"])
+        basic_window = basic_canvas.create_window((0, 0), window=basic, anchor="nw")
+
+        self.watch(basic, "card")
+        self.basic_canvas = basic_canvas
+
+        def _basic_on_frame_configure(event=None):
+            basic_canvas.configure(scrollregion=basic_canvas.bbox("all"))
+
+        def _basic_on_canvas_configure(event):
+            basic_canvas.itemconfigure(basic_window, width=event.width)
+
+        basic.bind("<Configure>", _basic_on_frame_configure)
+        basic_canvas.bind("<Configure>", _basic_on_canvas_configure)
+
+        def _basic_on_mousewheel(event):
+            if event.delta:
+                basic_canvas.yview_scroll(int(-event.delta / 120), "units")
+            elif getattr(event, "num", None) == 4:
+                basic_canvas.yview_scroll(-1, "units")
+            elif getattr(event, "num", None) == 5:
+                basic_canvas.yview_scroll(1, "units")
+
+        for widget in (basic_canvas, basic):
+            widget.bind("<MouseWheel>", _basic_on_mousewheel)
+            widget.bind("<Button-4>", _basic_on_mousewheel)
+            widget.bind("<Button-5>", _basic_on_mousewheel)
 
         route = self.make_section(body)
         route.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
 
         body.rowconfigure(0, weight=1)
-        basic.grid_propagate(False)
+
         route.grid_propagate(False)
 
-        body.rowconfigure(0, weight=1)
+        basic.columnconfigure(0, weight=1)
+        basic.columnconfigure(1, weight=1)
+        route.columnconfigure(1, weight=1)
 
-        for panel in (basic, route):
-            panel.columnconfigure(1, weight=1)
-
-        self.make_label(basic, "Основное", role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
-        self.add_entry(basic, 1, "Адрес", self.listen_host)
-        self.add_entry(basic, 2, "Порт", self.listen_port)
+        self.make_label(basic, self.tr("basic"), role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
+        self.add_entry(basic, 1, self.tr("address"), self.listen_host)
+        self.add_entry(basic, 2, self.tr("port"), self.listen_port)
         self.add_entry_with_button(
             basic,
             3,
-            "Secret (рекомендуется изменить)",
+            self.tr("secret_label"),
             self.secret,
             button_text="↻",
             button_command=self.generate_secret,
@@ -857,7 +1381,7 @@ class App(tk.Tk):
 
         self.make_caption(
             secret_type_box,
-            "Тип secret (дефолт Fake TLS)",
+            self.tr("secret_type_label"),
             bg="card",
         ).grid(
             row=0,
@@ -889,19 +1413,61 @@ class App(tk.Tk):
 
         self.add_check(
             autostart_box,
-            "Запускать вместе с системой",
-            self.autostart_windows,
+            self.tr("autostart_label"),
+            self.autostart,
         ).grid(row=0, column=0, sticky="w")
 
         self.make_label(
             autostart_box,
-            "по умолчанию выключено",
+            self.tr("autostart_hint"),
             role="muted",
             size=8,
             bg="card",
         ).grid(row=1, column=0, sticky="w", padx=(24, 0), pady=(2, 0))
 
-        self.make_label(route, "Маршрут", role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
+        updates_box = tk.Frame(basic, bd=0)
+        self.watch(updates_box, "card")
+        updates_box.grid(
+            row=8,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=18,
+            pady=(8, 10),
+        )
+        updates_box.columnconfigure(0, weight=1)
+
+        self.add_check(
+            updates_box,
+            self.tr("check_updates_label"),
+            self.check_updates,
+        ).grid(row=0, column=0, sticky="w")
+
+        self.make_label(
+            updates_box,
+            self.tr("check_updates_hint"),
+            role="muted",
+            size=8,
+            bg="card",
+        ).grid(row=1, column=0, sticky="w", padx=(24, 0), pady=(2, 0))
+
+        self.make_button(
+            updates_box,
+            text=self.tr("check_updates_now"),
+            command=lambda: self.check_updates_now(manual=True),
+            kind="secondary",
+            width=18,
+        ).grid(row=3, column=0, sticky="w", pady=(4, 8))
+
+        self.make_label(
+            updates_box,
+            textvariable=self.update_status,
+            role="muted",
+            size=9,
+            bg="card",
+        ).grid(row=4, column=0, columnspan=2, sticky="w")
+
+        self.make_label(route, self.tr("route"), role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
         route_mode_box = tk.Frame(route, bd=0)
         self.watch(route_mode_box, "card")
         route_mode_box.grid(
@@ -916,7 +1482,7 @@ class App(tk.Tk):
 
         self.make_caption(
             route_mode_box,
-            "Режим (дефолт Direct WSS)",
+            self.tr("mode_label"),
             bg="card",
         ).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
@@ -944,13 +1510,13 @@ class App(tk.Tk):
 
         self.make_label(
             cf_box,
-            "только если есть свой домен в Cloudflare",
+            self.tr("cf_hint"),
             role="muted",
             size=8,
             bg="card",
         ).grid(row=1, column=0, sticky="w", padx=(24, 0), pady=(2, 0))
 
-        self.add_entry(route, 2, "Cloudflare suffix (вводить если выбран режим Cloudflare DNS)", self.cf_domain)
+        self.add_entry(route, 2, self.tr("cf_suffix"), self.cf_domain)
         domain_outer = tk.Frame(route, bd=0)
         self.watch(domain_outer, "card")
         domain_outer.grid(
@@ -965,7 +1531,7 @@ class App(tk.Tk):
 
         self.make_caption(
             domain_outer,
-            "Домены (дефолт kws)",
+            self.tr("domains_label"),
             bg="card",
         ).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
@@ -982,7 +1548,7 @@ class App(tk.Tk):
 
         self.add_radio(
             domain_box,
-            "имена DC",
+            self.tr("dc_names"),
             self.domain_style,
             "names",
         ).grid(row=0, column=1, sticky="w", padx=(18, 0))
@@ -990,8 +1556,8 @@ class App(tk.Tk):
         bottom = tk.Frame(frame, bd=0)
         self.watch(bottom, "bg")
         bottom.grid(row=3, column=0, sticky="ew", pady=(16, 0))
-        self.make_button(bottom, text="Сохранить", command=lambda: self.save_settings_window(win), kind="primary", width=14).pack(side="right")
-        self.make_button(bottom, text="Закрыть", command=win.destroy, kind="secondary", width=12).pack(side="right", padx=(0, 10))
+        self.make_button(bottom, text=self.tr("save"), command=lambda: self.save_settings_window(win), kind="primary", width=14).pack(side="right")
+        self.make_button(bottom, text=self.tr("close"), command=win.destroy, kind="secondary", width=12).pack(side="right", padx=(0, 10))
 
         self.apply_theme()
         self.refresh_summary()
@@ -1128,6 +1694,14 @@ class App(tk.Tk):
                 padx=14,
                 pady=12,
             )
+
+        if hasattr(self, "basic_canvas"):
+            try:
+                if self.basic_canvas.winfo_exists():
+                    self.basic_canvas.configure(bg=t["card"])
+            except Exception:
+                pass
+
         if self._settings_win and self._settings_win.winfo_exists():
             self._settings_win.configure(bg=t["bg"])
 
@@ -1153,6 +1727,7 @@ class App(tk.Tk):
     def toggle_theme(self) -> None:
         self.theme_name.set("light" if self.theme_name.get() == "dark" else "dark")
         self.apply_theme()
+        self.update_language_controls()
         try:
             self.save_config(silent=True)
         except Exception:
@@ -1171,10 +1746,10 @@ class App(tk.Tk):
         style = "kws" if self.domain_style.get() == "kws" else "names"
         self.quick_settings.set(
             f"{self.listen_host.get()}:{self.listen_port.get()}  ·  {mode}  ·  {route}/{style}  ·  "
-            f"Pin IP {fmt_bool(self.pin_telegram_ip.get())}  ·  TCP fallback {fmt_bool(self.direct_fallback.get())}"
+            f"Pin IP {fmt_bool(self.pin_telegram_ip.get(), self.language.get())}  ·  TCP fallback {fmt_bool(self.direct_fallback.get(), self.language.get())}"
         )
         running = bool(self.proc and self.proc.poll() is None)
-        self.toggle_text.set("Выключить" if running else "Включить")
+        self.toggle_text.set(self.tr("toggle_off") if running else self.tr("toggle_on"))
         if hasattr(self, "toggle_btn"):
             # Blue when idle, red when running.
             kind = "danger" if running else "primary"
@@ -1195,13 +1770,9 @@ class App(tk.Tk):
     def clear_logs(self) -> None:
         self.log_text.delete("1.0", END)
         self._log_lines_since_prune = 0
-        self.log("Логи очищены.", "muted")
+        self.log(self.tr("logs_cleared"), "muted")
 
     def prune_logs_if_needed(self, force: bool = False) -> None:
-        """
-        Держит в GUI только последние self._max_log_lines строк.
-        Старые строки удаляются, чтобы ScrolledText не рос бесконечно.
-        """
         if not hasattr(self, "log_text"):
             return
 
@@ -1228,18 +1799,13 @@ class App(tk.Tk):
             pass
         
     def export_logs(self) -> None:
-        """
-        Экспортирует текущие видимые GUI-логи в .txt файл.
-        Если включено ограничение размера логов, экспортируются последние строки,
-        которые сейчас есть в окне логов.
-        """
         try:
             content = self.log_text.get("1.0", "end-1c").strip()
         except Exception:
             content = ""
 
         if not content:
-            messagebox.showinfo(APP_NAME, "Логи пустые, экспортировать нечего.")
+            messagebox.showinfo(APP_NAME, self.tr("logs_empty"))
             return
 
         from datetime import datetime
@@ -1247,7 +1813,7 @@ class App(tk.Tk):
         default_name = f"tunnelgram_logs_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.txt"
 
         path = filedialog.asksaveasfilename(
-            title="Экспорт логов",
+            title=self.tr("export_logs_title"),
             defaultextension=".txt",
             initialfile=default_name,
             filetypes=[
@@ -1263,18 +1829,13 @@ class App(tk.Tk):
         try:
             Path(path).write_text(content + "\n", encoding="utf-8")
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Не удалось сохранить логи:\n\n{exc}")
+            messagebox.showerror(APP_NAME, self.tr("save_logs_failed", error=exc))
             return
 
-        self.log(f"Логи экспортированы: {path}", "ok")
+        self.log(self.tr("logs_exported", path=path), "ok")
 
     def clear_logs_on_exit(self) -> None:
-        """
-        Очищает GUI-логи при настоящем выходе из приложения.
-        Не пишет строку "Логи очищены", потому что окно уже закрывается.
-        """
         try:
-            # Очищаем очередь логов, чтобы старые строки не успели дорисоваться.
             while True:
                 self.log_queue.get_nowait()
         except queue.Empty:
@@ -1300,7 +1861,7 @@ class App(tk.Tk):
             or "WSS handshake failed" in clean
             or "WSS path failed" in clean
         )
-        if noisy and self.telegram_status.get() == "Подключён":
+        if noisy and self.telegram_status.get() == self.tr("status_connected"):
             return False, None, clean
         tag = None
         if "WARNING" in clean or "failed" in clean or "timeout" in clean.lower():
@@ -1332,9 +1893,6 @@ class App(tk.Tk):
 
 
     def suppress_ws_noise(self) -> tuple[bool, str | None, str]:
-        """
-        Скрывает короткий WSS-шум, но иногда показывает краткую сводку.
-        """
         self._suppressed_ws_noise += 1
         now = time.monotonic()
 
@@ -1342,48 +1900,48 @@ class App(tk.Tk):
             count = self._suppressed_ws_noise
             self._suppressed_ws_noise = 0
             self._last_ws_noise_report = now
-            return True, "muted", f"Скрыто {count} коротких WSS-событий."
+            return True, "muted", self.tr("hidden_wss_events", count=count)
 
         return False, None, ""
 
     def parse_status_from_log(self, line: str) -> bool:
         stripped = line.strip()
         if stripped == "__STATUS_WSS_OK__":
-            self.telegram_status.set("WSS доступен")
+            self.telegram_status.set(self.tr("status_wss_available"))
             return False
         if stripped == "__STATUS_WSS_DONE__":
-            if self.telegram_status.get() == "Проверяю WSS…":
-                self.telegram_status.set("WSS не найден")
+            if self.telegram_status.get() == self.tr("status_checking_wss"):
+                self.telegram_status.set(self.tr("status_wss_not_found"))
             return False
         if stripped == "__STATUS_WSS_FAIL__":
-            self.telegram_status.set("Ошибка проверки")
+            self.telegram_status.set(self.tr("status_check_error"))
             return False
 
         if "local proxy listening" in line:
-            self.status.set("Работает")
-            self.telegram_status.set("Жду Telegram")
+            self.status.set(self.tr("status_running"))
+            self.telegram_status.set(self.tr("status_waiting_telegram"))
         if "-> Telegram WSS" in line:
-            self.telegram_status.set("Подключён")
+            self.telegram_status.set(self.tr("status_connected"))
             try:
                 n = int(self.active_status.get())
                 self.active_status.set(str(max(1, n)))
             except ValueError:
                 self.active_status.set("1")
         if "rejected:" in line:
-            self.telegram_status.set("Secret не принят")
+            self.telegram_status.set(self.tr("status_secret_rejected"))
         elif "WSS path failed" in line or "unexpected error" in line or " timeout" in line:
-            if self.telegram_status.get() not in {"Подключён", "WSS доступен"}:
-                self.telegram_status.set("Проблема сети")
+            if self.telegram_status.get() not in {self.tr("status_connected"), self.tr("status_wss_available")}:
+                self.telegram_status.set(self.tr("status_network_problem"))
         m = re.search(r"stats: .*active=(\d+).*err=(\d+).*up=([^ ]+) down=([^\s]+)", line)
         if m:
             self.active_status.set(m.group(1))
             self.errors_status.set(m.group(2))
             self.traffic_status.set(f"↑ {m.group(3)}   ↓ {m.group(4)}")
             if int(m.group(1)) > 0:
-                self.telegram_status.set("Подключён")
+                self.telegram_status.set(self.tr("status_connected"))
         if "[process exited]" in line:
-            self.status.set("Остановлен")
-            self.telegram_status.set("Нет подключений")
+            self.status.set(self.tr("status_stopped"))
+            self.telegram_status.set(self.tr("status_no_connections"))
         return True
 
     def drain_logs(self) -> None:
@@ -1398,9 +1956,384 @@ class App(tk.Tk):
         except queue.Empty:
             pass
         if self.proc and self.proc.poll() is not None:
-            self.status.set("Остановлен")
+            self.status.set(self.tr("status_stopped"))
             self.refresh_summary()
         self.after(150, self.drain_logs)
+
+    # ── app helpers ─────────────────────────────────────────────────────────
+    def open_url(self, url: str) -> None:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+
+
+    def copy_version(self) -> None:
+        value = f"{APP_NAME} v{VERSION}"
+
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(value)
+            self.log(self.tr("version_copied"), "ok")
+        except Exception:
+            pass
+
+
+    def open_config_folder(self) -> None:
+        folder = CONFIG_PATH.parent
+
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            folder = folder.resolve()
+
+            if not folder.exists():
+                raise FileNotFoundError(str(folder))
+
+            if not folder.is_dir():
+                raise NotADirectoryError(str(folder))
+
+            if os.name == "nt":
+                try:
+                    subprocess.Popen(
+                        ["explorer.exe", str(folder)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    self.log(self.tr("config_folder_opened"), "ok")
+                    return
+                except Exception:
+                    os.startfile(str(folder))  # type: ignore[attr-defined]
+                    self.log(self.tr("config_folder_opened"), "ok")
+                    return
+
+            if sys.platform == "darwin":
+                subprocess.Popen(
+                    ["open", str(folder)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self.log(self.tr("config_folder_opened"), "ok")
+                return
+
+            candidates = []
+
+            if shutil.which("xdg-open"):
+                candidates.append(["xdg-open", str(folder)])
+
+            if shutil.which("gio"):
+                candidates.append(["gio", "open", str(folder)])
+
+            for cmd in candidates:
+                try:
+                    subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    self.log(self.tr("config_folder_opened"), "ok")
+                    return
+                except Exception:
+                    continue
+
+            raise RuntimeError("No folder opener found")
+
+        except Exception as exc:
+            messagebox.showerror(
+                APP_NAME,
+                self.tr("config_folder_open_failed", error=exc),
+            )
+
+    def open_about_window(self) -> None:
+        win = Toplevel(self)
+        win.title(self.tr("about_title"))
+        win.geometry("450x350")
+        win.minsize(450, 350)
+        win.resizable(False, False)
+        win.transient(self)
+        win.configure(bg=self.theme["bg"])
+        win.columnconfigure(0, weight=1)
+        win.rowconfigure(0, weight=1)
+
+        frame = tk.Frame(win, bd=0, highlightthickness=0)
+        self.watch(frame, "bg")
+        frame.grid(row=0, column=0, sticky="nsew", padx=20, pady=20)
+        frame.columnconfigure(0, weight=1)
+
+        self.make_label(
+            frame,
+            "tunnelgram",
+            role="text",
+            size=24,
+            weight="bold",
+            bg="bg",
+        ).grid(row=0, column=0, sticky="w")
+
+        self.make_label(
+            frame,
+            self.tr("about_version", version=VERSION),
+            role="muted",
+            size=10,
+            bg="bg",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        self.make_label(
+            frame,
+            self.tr("about_description"),
+            role="soft_text",
+            size=10,
+            bg="bg",
+            wraplength=500,
+            justify="left",
+        ).grid(row=2, column=0, sticky="w", pady=(16, 0))
+
+        buttons = tk.Frame(frame, bd=0)
+        self.watch(buttons, "bg")
+        buttons.grid(row=4, column=0, sticky="ew", pady=(18, 0))
+
+        buttons.columnconfigure(0, weight=1)
+
+        self.make_button(
+            buttons,
+            text=self.tr("open_github"),
+            command=lambda: self.open_url(GITHUB_REPO_URL),
+            kind="secondary",
+        ).grid(row=0, column=0, sticky="ew", pady=(0, 10))
+
+        self.make_button(
+            buttons,
+            text=self.tr("open_releases"),
+            command=lambda: self.open_url(GITHUB_RELEASES_URL),
+            kind="secondary",
+        ).grid(row=1, column=0, sticky="ew", pady=(0, 10))
+
+        bottom = tk.Frame(frame, bd=0)
+        self.watch(bottom, "bg")
+        bottom.grid(row=5, column=0, sticky="ew", pady=(4, 0))
+        bottom.columnconfigure(0, weight=1)
+
+        self.make_button(
+            bottom,
+            text=self.tr("close"),
+            command=win.destroy,
+            kind="primary",
+        ).grid(row=0, column=0, sticky="ew")
+
+        self.apply_theme()
+
+    def reset_settings(self) -> None:
+        try:
+            confirmed = messagebox.askyesno(
+                self.tr("reset_settings_title"),
+                self.tr("reset_settings_message"),
+                parent=self._settings_win if self._settings_win and self._settings_win.winfo_exists() else self,
+            )
+        except Exception:
+            confirmed = False
+
+        if not confirmed:
+            return
+
+        try:
+            if self.proc and self.proc.poll() is None:
+                self.stop_proxy()
+        except Exception:
+            pass
+
+        preserved_language = self.language.get() if hasattr(self, "language") else DEFAULT_CONFIG.get("language", "en")
+        preserved_theme = self.theme_name.get() if hasattr(self, "theme_name") else DEFAULT_CONFIG.get("theme", "dark")
+        preserved_check_updates = bool(self.check_updates.get()) if hasattr(self, "check_updates") else DEFAULT_CONFIG.get("check_updates", True)
+
+        cfg = dict(DEFAULT_CONFIG)
+        cfg["language"] = preserved_language
+        cfg["theme"] = preserved_theme
+        cfg["check_updates"] = preserved_check_updates
+        cfg["autostart"] = False
+
+        try:
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CONFIG_PATH.write_text(
+                json.dumps(cfg, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+        self.listen_host.set(str(cfg["listen_host"]))
+        self.listen_port.set(str(cfg["listen_port"]))
+        self.secret.set(str(cfg["secret"]))
+        self.secret_mode.set(str(cfg["secret_mode"]))
+        self.fake_tls_domain.set(str(cfg["fake_tls_domain"]))
+        self.route_mode.set(str(cfg["route_mode"]))
+        self.cf_domain.set(str(cfg["cf_domain"]))
+        self.pin_telegram_ip.set(bool(cfg["pin_telegram_ip"]))
+        self.domain_style.set(str(cfg["domain_style"]))
+        self.direct_fallback.set(bool(cfg["direct_fallback"]))
+        self.autostart.set(bool(cfg["autostart"]))
+        self.theme_name.set(str(cfg["theme"]))
+        self.language.set(str(cfg["language"]))
+
+        if hasattr(self, "check_updates"):
+            self.check_updates.set(bool(cfg["check_updates"]))
+
+        try:
+            self.sync_system_autostart()
+        except Exception:
+            pass
+
+        self.status.set(self.tr("status_stopped"))
+        self.telegram_status.set(self.tr("status_no_connections"))
+        self.active_status.set("0")
+        self.traffic_status.set("↑ 0B   ↓ 0B")
+        self.errors_status.set("0")
+
+        self.apply_theme()
+        self.update_language_controls()
+        self.refresh_summary()
+
+        try:
+            if self._settings_win and self._settings_win.winfo_exists():
+                self._settings_win.destroy()
+                self._settings_win = None
+                self.open_settings()
+        except Exception:
+            pass
+
+        self.log(self.tr("settings_reset_done"), "ok")
+
+    # ── updates ─────────────────────────────────────────────────────────────
+    def set_update_status(self, key: str, **kwargs) -> None:
+        self._update_status_key = key
+        self._update_status_kwargs = dict(kwargs)
+
+        try:
+            self.update_status.set(self.tr(key, **kwargs))
+        except Exception:
+            pass
+
+
+    def parse_version_tuple(self, value: str) -> tuple[int, ...]:
+        value = str(value or "").strip().lower()
+        value = value.removeprefix("v")
+        value = value.split("-", 1)[0]
+
+        parts = re.findall(r"\d+", value)
+
+        if not parts:
+            return (0,)
+
+        return tuple(int(part) for part in parts)
+
+
+    def is_newer_version(self, remote_version: str, local_version: str) -> bool:
+        remote = self.parse_version_tuple(remote_version)
+        local = self.parse_version_tuple(local_version)
+
+        max_len = max(len(remote), len(local))
+        remote = remote + (0,) * (max_len - len(remote))
+        local = local + (0,) * (max_len - len(local))
+
+        return remote > local
+
+
+    def fetch_latest_release(self) -> dict:
+        request = urllib.request.Request(
+            GITHUB_LATEST_RELEASE_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"{APP_NAME}/{VERSION}",
+            },
+        )
+
+        try:
+            with urllib.request.urlopen(request, timeout=8) as response:
+                raw = response.read().decode("utf-8", errors="replace")
+
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise UpdateCheckNotFoundError("release not found") from exc
+            raise UpdateCheckNetworkError(str(exc)) from exc
+
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise UpdateCheckNetworkError(str(exc)) from exc
+
+        try:
+            data = json.loads(raw)
+        except Exception as exc:
+            raise ValueError("invalid json") from exc
+
+        if not isinstance(data, dict):
+            raise ValueError("invalid response")
+
+        return data
+
+
+    def check_updates_now(self, *, manual: bool = True) -> None:
+        self.set_update_status("update_status_checking")
+
+        threading.Thread(
+            target=lambda: self.check_updates_worker(manual=manual),
+            daemon=True,
+            name="tunnelgram-update-check",
+        ).start()
+
+
+    def check_updates_worker(self, *, manual: bool) -> None:
+        try:
+            data = self.fetch_latest_release()
+
+            latest_tag = str(data.get("tag_name", "")).strip()
+            release_url = str(data.get("html_url", "")).strip()
+
+            if not latest_tag:
+                self.after(0, lambda: self.set_update_status("update_status_bad_response"))
+                return
+
+            if self.is_newer_version(latest_tag, VERSION):
+                self._latest_release_url = release_url
+
+                def show_available() -> None:
+                    self.set_update_status("update_status_available", version=latest_tag)
+
+                    if manual:
+                        message = self.tr(
+                            "update_open_release_question",
+                            latest=latest_tag,
+                            current=VERSION,
+                        )
+
+                        try:
+                            open_release = messagebox.askyesno(APP_NAME, message)
+                        except Exception:
+                            open_release = False
+
+                        if open_release and release_url:
+                            try:
+                                webbrowser.open(release_url)
+                            except Exception:
+                                pass
+
+                self.after(0, show_available)
+                return
+
+            self._latest_release_url = release_url
+            self.after(0, lambda: self.set_update_status("update_status_latest"))
+
+        except UpdateCheckNotFoundError:
+            self.after(0, lambda: self.set_update_status("update_status_not_found"))
+
+        except UpdateCheckNetworkError:
+            # Не показываем messagebox. Просто тихий понятный статус.
+            self.after(0, lambda: self.set_update_status("update_status_later"))
+
+        except Exception:
+            self.after(0, lambda: self.set_update_status("update_status_bad_response"))
+
+
+    def check_updates_on_startup(self) -> None:
+        if not bool(self.check_updates.get()):
+            return
+
+        self.check_updates_now(manual=False)
 
     # ── actions ────────────────────────────────────────────────────────────
     def validate_fields(self) -> None:
@@ -1408,18 +2341,18 @@ class App(tk.Tk):
         try:
             port = int(self.listen_port.get().strip())
         except Exception as exc:
-            raise ValueError("Порт должен быть числом") from exc
+            raise ValueError(self.tr("port_must_be_number")) from exc
         if not (1 <= port <= 65535):
-            raise ValueError("Порт должен быть от 1 до 65535")
+            raise ValueError(self.tr("port_range"))
         domain = self.fake_tls_domain.get().strip().lower()
         if domain:
             hostname_to_hex(domain)
         if self.secret_mode.get() == "ee" and not domain:
-            raise ValueError("Для Fake TLS нужен SNI-домен, например www.google.com")
+            raise ValueError(self.tr("faketls_sni_required"))
         if self.route_mode.get() == "cloudflare":
             cf_domain = self.cf_domain.get().strip().lower()
             if not cf_domain or "." not in cf_domain:
-                raise ValueError("Для Cloudflare DNS нужен suffix, например example.com")
+                raise ValueError(self.tr("cf_suffix_required"))
 
     def current_full_secret(self) -> str:
         secret = validate_secret_hex(self.secret.get())
@@ -1443,7 +2376,7 @@ class App(tk.Tk):
             return
         self.clipboard_clear()
         self.clipboard_append(value)
-        self.log("Полный secret скопирован.", "ok")
+        self.log(self.tr("full_secret_copied"), "ok")
 
     def copy_tg_link(self) -> None:
         try:
@@ -1453,7 +2386,7 @@ class App(tk.Tk):
             return
         self.clipboard_clear()
         self.clipboard_append(link)
-        self.log("Ссылка tg:// скопирована.", "ok")
+        self.log(self.tr("tg_link_copied"), "ok")
 
     def open_tg_link(self) -> None:
         try:
@@ -1461,13 +2394,81 @@ class App(tk.Tk):
         except Exception as exc:
             messagebox.showerror(APP_NAME, str(exc))
             return
-        webbrowser.open(link)
-        self.log("Открываю Telegram.", "ok")
+
+        ok = self.open_external_url(link)
+
+        if ok:
+            self.log("Открываю Telegram. (если окно не развернулось автоматически, нужно развернуть его самостоятельно и согласиться на добавление локального прокси)", "ok")
+        else:
+            self.copy_tg_link()
+            messagebox.showwarning(
+                APP_NAME,
+                "Не удалось открыть Telegram автоматически.\n\n"
+                "Ссылка скопирована в буфер обмена — вставь её вручную в Telegram Desktop.",
+            )
+        
+    def open_external_url(self, url: str) -> bool:
+        if os.name == "nt":
+            return bool(webbrowser.open(url))
+
+        if sys.platform == "darwin":
+            try:
+                subprocess.Popen(
+                    ["open", url],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except Exception:
+                return bool(webbrowser.open(url))
+
+        candidates = []
+
+        if shutil.which("telegram-desktop"):
+            candidates.append(["telegram-desktop", url])
+
+        if shutil.which("Telegram"):
+            candidates.append(["Telegram", url])
+
+        if shutil.which("telegram"):
+            candidates.append(["telegram", url])
+
+        if shutil.which("flatpak"):
+            try:
+                result = subprocess.run(
+                    ["flatpak", "info", "org.telegram.desktop"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+                if result.returncode == 0:
+                    candidates.append(["flatpak", "run", "org.telegram.desktop", url])
+            except Exception:
+                pass
+
+        if shutil.which("xdg-open"):
+            candidates.append(["xdg-open", url])
+
+        if shutil.which("gio"):
+            candidates.append(["gio", "open", url])
+
+        for cmd in candidates:
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                return True
+            except Exception:
+                continue
+
+        return bool(webbrowser.open(url))
 
     def generate_secret(self) -> None:
         self.secret.set(generate_secret_hex())
         self.refresh_summary()
-        self.log("Сгенерирован новый base secret.", "ok")
+        self.log(self.tr("new_secret_generated"), "ok")
 
     def toggle_proxy(self) -> None:
         if self.proc and self.proc.poll() is None:
@@ -1477,7 +2478,7 @@ class App(tk.Tk):
 
     def start_proxy(self) -> None:
         if self.proc and self.proc.poll() is None:
-            self.log("Прокси уже запущен.", "muted")
+            self.log(self.tr("proxy_already_started"), "muted")
             return
         try:
             self.save_config(silent=True)
@@ -1486,15 +2487,11 @@ class App(tk.Tk):
             return
 
         self.errors_status.set("0")
-        self.telegram_status.set("Жду Telegram")
+        self.telegram_status.set(self.tr("status_waiting_telegram"))
         self.active_status.set("0")
         self.traffic_status.set("↑ 0B   ↓ 0B")
 
-        cmd = [
-            sys.executable,
-            "-u",
-            "-m",
-            "tunnelgram.local_proxy",
+        cmd = proxy_command() + [
             "--listen-host",
             self.listen_host.get().strip(),
             "--listen-port",
@@ -1519,15 +2516,23 @@ class App(tk.Tk):
             cmd.append("--no-direct-fallback")
 
         try:
-            self.proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            self.proc = subprocess.Popen(
+                cmd,
+                cwd=str(PROJECT_ROOT),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                **subprocess_window_kwargs(),
+            )
         except Exception as exc:
-            messagebox.showerror(APP_NAME, f"Не удалось запустить прокси: {exc}")
+            messagebox.showerror(APP_NAME, self.tr("proxy_start_failed", error=exc))
             return
 
         threading.Thread(target=self.reader_thread, daemon=True).start()
-        self.status.set("Работает")
+        self.status.set(self.tr("status_running"))
         self.toggle_text.set("Выключить")
-        self.log("Прокси запущен.", "ok")
+        self.log(self.tr("proxy_started"), "ok")
         self.refresh_summary()
 
     def reader_thread(self) -> None:
@@ -1539,34 +2544,36 @@ class App(tk.Tk):
 
     def stop_proxy(self) -> None:
         if not self.proc or self.proc.poll() is not None:
-            self.status.set("Остановлен")
-            self.telegram_status.set("Нет подключений")
+            self.status.set(self.tr("status_stopped"))
+            self.telegram_status.set(self.tr("status_no_connections"))
             self.active_status.set("0")
             self.refresh_summary()
-            self.log("Прокси не запущен.", "muted")
+            self.log(self.tr("proxy_not_started"), "muted")
             return
         self.proc.terminate()
         try:
             self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
-        self.status.set("Остановлен")
-        self.telegram_status.set("Нет подключений")
+        self.status.set(self.tr("status_stopped"))
+        self.telegram_status.set(self.tr("status_no_connections"))
         self.active_status.set("0")
         self.toggle_text.set("Включить")
         self.refresh_summary()
-        self.log("Прокси остановлен.", "muted")
+        self.log(self.tr("proxy_stopped"), "muted")
 
     def check_wss(self) -> None:
-        cmd = [
-            sys.executable,
-            "-u",
-            "-m",
-            "tunnelgram.diagnostics",
+        language = self.language.get() if hasattr(self, "language") else "ru"
+
+        cmd = diagnostics_command() + [
             "--domain-style",
             self.domain_style.get().strip() or "kws",
             "--timeout",
             "8",
+            "--language",
+            language,
+            "--gui-markers",
+            "--stop-on-success",
         ]
         if self.route_mode.get() == "cloudflare":
             cmd.extend(["--route-mode", "cloudflare", "--cf-domain", self.cf_domain.get().strip().lower()])
@@ -1575,17 +2582,32 @@ class App(tk.Tk):
         if self.pin_telegram_ip.get():
             cmd.append("--pin-telegram-ip")
 
-        self.telegram_status.set("Проверяю WSS…")
-        self.log("Проверяю WSS endpoint’ы…", "muted")
+        self.telegram_status.set(self.tr("status_checking_wss"))
+        self.log(self.tr("check_wss_log"), "muted")
 
         def run_diag():
             try:
-                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(PROJECT_ROOT),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    **subprocess_window_kwargs(),
+                )
                 ok_seen = False
                 if proc.stdout:
                     for line in proc.stdout:
-                        if " OK" in line or "WSS OK" in line:
+                        stripped = line.strip()
+
+                        if stripped == "__DIAG_WSS_OK__":
                             ok_seen = True
+                            continue
+
+                        if stripped == "__DIAG_WSS_FAIL__":
+                            continue
+
                         self.log_queue.put(line)
                 proc.wait(timeout=90)
                 self.log_queue.put("__STATUS_WSS_OK__\n" if ok_seen else "__STATUS_WSS_DONE__\n")
@@ -1623,32 +2645,107 @@ class App(tk.Tk):
 
     def setup_tray_icon(self) -> None:
         if pystray is None or Image is None or ImageDraw is None:
+            self.tray_icon = None
             return
 
-        def action(fn):
-            return lambda icon=None, item=None: self.after(0, fn)
-
         menu = pystray.Menu(
-            pystray.MenuItem("Показать", action(self.show_from_tray)),
-            pystray.MenuItem("Включить/выключить", action(self.toggle_proxy)),
-            pystray.MenuItem("Открыть Telegram", action(self.open_tg_link)),
-            pystray.MenuItem("Скопировать tg://", action(self.copy_tg_link)),
-            pystray.MenuItem("Выход", action(self.quit_app)),
+            pystray.MenuItem(
+                self.tr("tray_show_window"),
+                self.tray_action(self.show_from_tray),
+            ),
+            pystray.MenuItem(
+                self.tr("tray_toggle_proxy"),
+                self.tray_action(self.toggle_proxy),
+            ),
+            pystray.MenuItem(
+                self.tr("tray_open_telegram"),
+                self.tray_action(self.open_tg_link),
+            ),
+            pystray.MenuItem(
+                self.tr("tray_copy_tg"),
+                self.tray_action(self.copy_tg_link),
+            ),
+            pystray.MenuItem(
+                self.tr("tray_exit"),
+                self.tray_action(self.quit_app),
+            ),
         )
-        self.tray_icon = pystray.Icon("tunnelgram", self.make_tray_image(), APP_NAME, menu)
-        self.tray_thread = threading.Thread(target=self.tray_icon.run, daemon=True)
+
+        self.tray_icon = pystray.Icon(
+            "tunnelgram",
+            self.make_tray_image(),
+            APP_NAME,
+            menu,
+        )
+
+        try:
+            if sys.platform.startswith("linux"):
+                backend = type(self.tray_icon).__module__
+                has_menu = getattr(self.tray_icon, "HAS_MENU", None)
+                has_default = getattr(self.tray_icon, "HAS_DEFAULT_ACTION", None)
+
+                if "_xorg" in backend:
+                    self.log(
+                        self.tr("tray_xorg_warn"),
+                        "warn",
+                    )
+                else:
+                    self.log(
+                        self.tr("tray_backend", backend=backend, menu=has_menu, default=has_default),
+                        "muted",
+                    )
+        except Exception:
+            pass
+
+        self.tray_thread = threading.Thread(
+            target=self.tray_icon.run,
+            daemon=True,
+            name="tunnelgram-tray",
+        )
         self.tray_thread.start()
 
     def hide_to_tray(self) -> None:
         if self.tray_icon is None:
-            self.log("Трей недоступен.", "warn")
+            self.log(self.tr("tray_unavailable"), "warn")
             return
+
+        self._hidden_to_tray = True
         self.withdraw()
+        self.log(self.tr("tray_hidden"), "muted")
 
     def show_from_tray(self) -> None:
-        self.deiconify()
-        self.lift()
-        self.focus_force()
+        self._hidden_to_tray = False
+
+        try:
+            self.deiconify()
+            self.state("normal")
+            self.lift()
+            self.focus_force()
+
+            self.attributes("-topmost", True)
+            self.after(250, lambda: self.attributes("-topmost", False))
+        except Exception:
+            pass
+        
+    def call_ui(self, fn) -> None:
+        try:
+            self.after(0, fn)
+        except Exception:
+            pass
+
+
+    def tray_action(self, fn):
+        return lambda icon=None, item=None: self.call_ui(fn)
+
+
+    def toggle_tray_window(self) -> None:
+        try:
+            if self._hidden_to_tray or self.state() == "withdrawn":
+                self.show_from_tray()
+            else:
+                self.hide_to_tray()
+        except Exception:
+            self.show_from_tray()
 
     def quit_app(self) -> None:
         self._quitting = True

@@ -116,12 +116,6 @@ def _parse_sni_extension(extensions: bytes) -> Optional[str]:
 
 
 def parse_faketls_client_hello(record: bytes, secret: bytes, *, timestamp_window: Optional[int] = 300) -> Optional[FakeTlsClientHello]:
-    """Validate Telegram MTProxy FakeTLS ClientHello and return parsed fields.
-
-    Telegram's ee-secret mode puts an HMAC-SHA256 authenticator into the TLS
-    ClientHello random field. The actual MTProto obfuscated2 init follows inside
-    TLS Application Data records.
-    """
     if len(record) < 5 + 4 + TLS_CLIENT_RANDOM_OFFSET_IN_HANDSHAKE + TLS_DIGEST_LEN:
         return None
     if record[0] != TLS_RECORD_HANDSHAKE:
@@ -186,12 +180,6 @@ def parse_faketls_client_hello(record: bytes, secret: bytes, *, timestamp_window
 
 
 def build_faketls_server_hello(secret: bytes, hello: FakeTlsClientHello) -> bytes:
-    """Build a Telegram MTProxy-compatible FakeTLS ServerHello.
-
-    This mirrors Flowseal/MTProxy behavior: fixed TLS 1.3-looking ServerHello,
-    same session id, random X25519 key share, CCS, and random encrypted
-    ApplicationData. The ServerHello random is HMAC(secret, client_random + response).
-    """
     sh = bytearray(_FLOWSEAL_SERVER_HELLO_TEMPLATE)
     session = (hello.session_id or b"\x00" * 32)[:32].ljust(32, b"\x00")
     sh[_FLOWSEAL_SH_SESSID_OFF : _FLOWSEAL_SH_SESSID_OFF + 32] = session
@@ -207,7 +195,6 @@ def build_faketls_server_hello(secret: bytes, hello: FakeTlsClientHello) -> byte
     return bytes(final)
 
 def build_faketls_client_hello(hostname: str) -> bytes:
-    """Build an unsigned ClientHello; useful for tests and upstream support."""
     host_b = hostname.strip().lower().encode("idna")
     exts = bytearray()
     sni_entry_len = 1 + 2 + len(host_b)

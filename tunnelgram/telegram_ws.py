@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import socket
 import ssl
 from dataclasses import dataclass
 from typing import Optional
@@ -11,9 +12,18 @@ from typing import Optional
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 MAX_HTTP_HEADER = 64 * 1024
 
+def connection_family_for_host(host: str) -> int:
+    mode = os.environ.get("TUNNELGRAM_IP_FAMILY", "ipv4").strip().lower()
+
+    if mode == "auto":
+        return socket.AF_UNSPEC
+
+    if mode == "ipv6":
+        return socket.AF_INET6
+
+    return socket.AF_INET
 
 class TelegramWebSocketError(Exception):
-    """Raised when the Telegram WebSocket handshake or stream fails."""
 
     def __init__(self, message: str, *, status_code: Optional[int] = None, location: str = ""):
         super().__init__(message)
@@ -48,7 +58,6 @@ DC_NAME_DOMAINS = {
 
 
 def normalize_ws_dc(dc_id: int) -> int:
-    """Telegram sometimes reports media/CDN DC 203; WS endpoint uses DC2 naming."""
     return 2 if int(dc_id) == 203 else int(dc_id)
 
 
@@ -78,13 +87,6 @@ def cloudflare_kws_domains(dc_id: int, is_media: bool, suffix: str) -> list[str]
 
 
 class RawTelegramWebSocket:
-    """Small binary WebSocket client with support for connect-IP + SNI/Host domain.
-
-    The Python websockets package is excellent for normal URLs, but Telegram WS
-    bridging often benefits from connecting to a known Telegram IP while keeping
-    SNI and Host as kws*.web.telegram.org. This class does exactly that and sends
-    masked binary frames as required for client-side WebSocket traffic.
-    """
 
     def __init__(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, endpoint: WsEndpoint):
         self.reader = reader
@@ -95,10 +97,6 @@ class RawTelegramWebSocket:
 
     @classmethod
     async def connect(cls, endpoint: WsEndpoint, *, timeout: float = 12.0) -> "RawTelegramWebSocket":
-        # Telegram WSS pin-IP and Cloudflare-proxy modes may deliberately
-        # connect to an IP/edge that does not present a certificate chain the
-        # default verifier accepts. This mirrors Flowseal's raw_websocket.py:
-        # keep TLS encryption and SNI, but do not fail the bridge on cert checks.
         ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -108,6 +106,7 @@ class RawTelegramWebSocket:
                 endpoint.port,
                 ssl=ctx,
                 server_hostname=endpoint.domain,
+                family=connection_family_for_host(endpoint.connect_host),
             ),
             timeout=timeout,
         )
@@ -214,23 +213,22 @@ class RawTelegramWebSocket:
                 except Exception:
                     pass
                 raise EOFError("WebSocket closed")
-            if opcode == 0x9:  # ping
+            if opcode == 0x9:
                 await self._send_frame(payload, opcode=0xA)
                 continue
-            if opcode == 0xA:  # pong
+            if opcode == 0xA:
                 continue
             if opcode in (0x1, 0x2):
                 if fin:
                     return payload
                 self._continuation = bytearray(payload)
                 continue
-            if opcode == 0x0:  # continuation
+            if opcode == 0x0:
                 self._continuation.extend(payload)
                 if fin:
                     out = bytes(self._continuation)
                     self._continuation.clear()
                     return out
-            # Unknown/control frames are ignored unless they close the stream.
 
     def __aiter__(self):
         return self

@@ -36,22 +36,15 @@ RESERVED_STARTS = {
 }
 RESERVED_CONTINUE = b"\x00\x00\x00\x00"
 
-# Direct TCP fallback IPs. These are conservative public MTProto DC addresses.
-# For Telegram WSS, the safest default is normal DNS. The optional "pin IP"
-# mode uses FLOWSEAL_WS_PIN_IP below instead of these per-DC TCP addresses.
 DEFAULT_DC_IPS = {
     1: "149.154.175.50",
     2: "149.154.167.50",
     3: "149.154.175.100",
     4: "149.154.167.91",
     5: "91.108.56.130",
-    # Telegram CDN/media DC occasionally appears as 203 in clients; route it as DC2.
     203: "149.154.167.50",
 }
 
-# Flowseal uses a small redirect map by default, commonly pointing WSS DC2/DC4
-# to this Telegram web endpoint IP while keeping SNI/Host as kws*.web.telegram.org.
-# It is optional here because many networks behave better with normal DNS.
 FLOWSEAL_WS_PIN_IP = "149.154.167.220"
 
 
@@ -79,7 +72,6 @@ class CryptoContext:
 
 
 def generate_secret_hex() -> str:
-    """Return a 16-byte MTProto proxy secret as 32 lowercase hex chars."""
     return os.urandom(16).hex()
 
 
@@ -97,13 +89,6 @@ def validate_secret_hex(secret_hex: str) -> str:
 
 
 def parse_proxy_secret(secret: str) -> ProxySecret:
-    """Parse dd/base/ee MTProto proxy secret strings.
-
-    Accepted forms:
-    - 32 hex chars: base key, dd transport by default.
-    - dd + 32 hex chars: padded-intermediate transport.
-    - ee + 32 hex chars + hex(hostname): FakeTLS transport.
-    """
     raw = secret.strip().lower()
     if raw.startswith("ee"):
         if len(raw) < 34 or len(raw) % 2 != 0:
@@ -140,12 +125,6 @@ def _aes_ctr(key: bytes, iv: bytes):
 
 
 def try_parse_client_handshake(handshake: bytes, secret: bytes) -> Optional[HandshakeInfo]:
-    """Parse Telegram Desktop's 64-byte MTProto obfuscated2 init packet.
-
-    Telegram sends the first 56 bytes as random key material and encrypts the
-    tail with AES-CTR using SHA256(prekey + secret). We only need the decrypted
-    protocol tag and DC index; message payload stays encrypted end-to-end.
-    """
     if len(handshake) != HANDSHAKE_LEN:
         return None
 
@@ -172,12 +151,6 @@ def try_parse_client_handshake(handshake: bytes, secret: bytes) -> Optional[Hand
 
 
 def generate_relay_init(proto_tag: bytes, dc_idx: int) -> bytes:
-    """Build a plain obfuscated2 init packet for the relay -> Telegram TCP leg.
-
-    The first 56 bytes remain clear random key material. The last 8 bytes
-    contain protocol tag + signed DC index + two random bytes, encrypted with
-    the AES-CTR stream positioned exactly as Telegram expects.
-    """
     if proto_tag not in (PROTO_TAG_ABRIDGED, PROTO_TAG_INTERMEDIATE, PROTO_TAG_PADDED_INTERMEDIATE):
         raise ValueError("Unsupported MTProto transport tag")
 
@@ -202,14 +175,6 @@ def generate_relay_init(proto_tag: bytes, dc_idx: int) -> bytes:
 
 
 def build_crypto_context(client_prekey_iv: bytes, secret: bytes, relay_init: bytes) -> CryptoContext:
-    """Create stream ciphers for client<->local and local<->Telegram legs.
-
-    Direction summary:
-    - client_decryptor: Telegram Desktop -> local proxy, fast-forwarded after the init packet.
-    - client_encryptor: local proxy -> Telegram Desktop.
-    - telegram_encryptor: local proxy -> Telegram server, fast-forwarded because relay_init was sent.
-    - telegram_decryptor: Telegram server -> local proxy.
-    """
     if len(client_prekey_iv) != PREKEY_LEN + IV_LEN:
         raise ValueError("client_prekey_iv must be 48 bytes")
     if len(relay_init) != HANDSHAKE_LEN:

@@ -80,11 +80,13 @@ chmod +x run_unix.sh
 Скрипт должен:
 
 1. найти `python3` или `python`;
-2. проверить наличие `tkinter`;
+2. проверить наличие `tkinter` в системном Python;
 3. создать `.venv`;
-4. обновить `pip`;
-5. установить зависимости из `requirements.txt`;
-6. запустить GUI.
+4. проверить наличие `tkinter` внутри `.venv`;
+5. обновить `pip`;
+6. установить зависимости из `requirements.txt`;
+7. проверить Python-файлы;
+8. запустить GUI.
 
 ### Если на Linux нет tkinter
 
@@ -138,6 +140,11 @@ run_unix_autostart.sh
 Он запускает приложение тише, без лишнего вывода в терминал, и подходит для запуска при входе в систему.
 
 Обычно создавать его вручную не нужно: приложение может создать его автоматически при включении автозапуска в настройках.
+
+Ошибки автозапуска на Linux/macOS записываются в лог:
+
+```text
+~/.tunnelgram/autostart.log
 
 ---
 
@@ -452,7 +459,10 @@ Open the project folder and run:
 run_windows.bat
 ```
 
-The script creates a Python virtual environment, installs dependencies, and starts the app.
+The script creates a Python virtual environment, installs dependencies, checks the main Python files, and starts the app.
+
+If startup succeeds, the console window closes automatically.  
+If an error occurs, the console stays open so the error can be copied for debugging.
 
 ### Hidden launch without console
 
@@ -489,11 +499,13 @@ Run:
 The script should:
 
 1. find `python3` or `python`;
-2. check for `tkinter`;
+2. check for `tkinter` in the system Python;
 3. create `.venv`;
-4. upgrade `pip`;
-5. install dependencies from `requirements.txt`;
-6. start the GUI.
+4. check for `tkinter` inside `.venv`;
+5. upgrade `pip`;
+6. install dependencies from `requirements.txt`;
+7. check Python files;
+8. start the GUI.
 
 ### If tkinter is missing on Linux
 
@@ -548,6 +560,11 @@ It starts the app quietly, without extra terminal output, and is suitable for lo
 
 Usually, you do not need to create it manually: the app can create it automatically when autostart is enabled in settings.
 
+Linux/macOS autostart errors are written to:
+
+```text
+~/.tunnelgram/autostart.log
+
 ---
 
 ## Telegram Desktop setup
@@ -555,7 +572,7 @@ Usually, you do not need to create it manually: the app can create it automatica
 In the app, click:
 
 ```text
-Включить
+Start
 ```
 
 Then click:

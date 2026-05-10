@@ -46,10 +46,12 @@ class LocalConfig:
     connect_timeout: float = 12.0
     buffer_size: int = 256 * 1024
     direct_fallback: bool = True
-    route_mode: str = "telegram"  # telegram | cloudflare
+    route_mode: str = "telegram"
     cf_domain: str = ""
     pin_telegram_ip: bool = False
-    domain_style: str = "kws"  # kws | names
+    auto_pin_fallback: bool = True
+    auto_pin_fallback_timeout: float = 8.0
+    domain_style: str = "kws"
     dc_ips: dict[int, str] = field(default_factory=lambda: dict(DEFAULT_DC_IPS))
 
     @property
@@ -122,7 +124,6 @@ async def _read_inbound_init(
     cfg: LocalConfig,
     label: str,
 ) -> Optional[tuple[bytes, ClientIO]]:
-    """Read either classic dd obfuscated2 init or ee FakeTLS + obfuscated2 init."""
     first5 = await asyncio.wait_for(reader.readexactly(5), timeout=10)
     maybe_tls = (
         bool(cfg.fake_tls_domain)
@@ -201,39 +202,99 @@ def _ws_domains(cfg: LocalConfig, dc_id: int, is_media: bool) -> list[str]:
     return official_kws_domains(dc_id, is_media)
 
 
-def _connect_host_for_domain(cfg: LocalConfig, dc_id: int, domain: str) -> str:
-    # For official Telegram WSS endpoints the most reliable default is to use
-    # normal DNS. If the user enables pinning, imitate Flowseal's approach:
-    # connect to Telegram's web endpoint IP while keeping SNI/Host as the WSS
-    # domain. This can help when DNS is poisoned, but can also time out on some
-    # networks, so it is no longer the default.
-    if cfg.route_mode == "telegram" and cfg.pin_telegram_ip:
-        return FLOWSEAL_WS_PIN_IP
-    return domain
+def _connect_candidates_for_domain(cfg: LocalConfig, domain: str) -> list[tuple[str, str, float]]:
+    if cfg.route_mode != "telegram":
+        return [(domain, "dns", cfg.connect_timeout)]
+
+    if cfg.pin_telegram_ip:
+        return [(FLOWSEAL_WS_PIN_IP, "pinned", cfg.connect_timeout)]
+
+    if cfg.auto_pin_fallback:
+        dns_timeout = min(cfg.connect_timeout, cfg.auto_pin_fallback_timeout)
+        return [
+            (domain, "dns", dns_timeout),
+            (FLOWSEAL_WS_PIN_IP, "auto-pinned", cfg.connect_timeout),
+        ]
+
+    return [(domain, "dns", cfg.connect_timeout)]
 
 
 async def _connect_telegram_ws(cfg: LocalConfig, dc_id: int, is_media: bool, relay_init: bytes) -> RawTelegramWebSocket:
     last_exc: Exception | None = None
+
     for domain in _ws_domains(cfg, dc_id, is_media):
-        connect_host = _connect_host_for_domain(cfg, dc_id, domain)
-        endpoint = WsEndpoint(dc_id=dc_id, domain=domain, connect_host=connect_host)
         display_dc = normalize_ws_dc(dc_id)
-        try:
-            log.debug("WSS try DC%d%s: %s via %s", display_dc, " media" if is_media else "", endpoint.url, connect_host)
-            ws = await RawTelegramWebSocket.connect(endpoint, timeout=cfg.connect_timeout)
-            await ws.send(relay_init)
-            return ws
-        except TelegramWebSocketError as exc:
-            last_exc = exc
-            if exc.is_redirect:
-                log.warning("WSS redirect from %s: %s", domain, exc.location or exc)
-                continue
-            log.warning("WSS handshake failed for %s via %s: %s", domain, connect_host, exc)
-        except Exception as exc:
-            last_exc = exc
-            log.warning("WSS connect failed for %s via %s: %r", domain, connect_host, exc)
+
+        for connect_host, connect_mode, timeout in _connect_candidates_for_domain(cfg, domain):
+            endpoint = WsEndpoint(dc_id=dc_id, domain=domain, connect_host=connect_host)
+
+            try:
+                log.debug(
+                    "WSS try DC%d%s: %s via %s [%s]",
+                    display_dc,
+                    " media" if is_media else "",
+                    endpoint.url,
+                    connect_host,
+                    connect_mode,
+                )
+
+                ws = await RawTelegramWebSocket.connect(endpoint, timeout=timeout)
+                await ws.send(relay_init)
+
+                if connect_mode == "auto-pinned":
+                    log.info(
+                        "Automatic Telegram IP fallback active for %s: using %s",
+                        domain,
+                        connect_host,
+                    )
+
+                return ws
+
+            except TelegramWebSocketError as exc:
+                last_exc = exc
+
+                if exc.is_redirect:
+                    log.warning("WSS redirect from %s: %s", domain, exc.location or exc)
+                    break
+
+                log.warning(
+                    "WSS handshake failed for %s via %s [%s]: %s",
+                    domain,
+                    connect_host,
+                    connect_mode,
+                    exc,
+                )
+
+                if connect_mode == "dns" and cfg.route_mode == "telegram" and cfg.auto_pin_fallback and not cfg.pin_telegram_ip:
+                    log.warning(
+                        "DNS WSS path failed for %s; trying pinned Telegram IP %s",
+                        domain,
+                        FLOWSEAL_WS_PIN_IP,
+                    )
+                    continue
+
+            except Exception as exc:
+                last_exc = exc
+
+                log.warning(
+                    "WSS connect failed for %s via %s [%s]: %r",
+                    domain,
+                    connect_host,
+                    connect_mode,
+                    exc,
+                )
+
+                if connect_mode == "dns" and cfg.route_mode == "telegram" and cfg.auto_pin_fallback and not cfg.pin_telegram_ip:
+                    log.warning(
+                        "DNS WSS path failed for %s; trying pinned Telegram IP %s",
+                        domain,
+                        FLOWSEAL_WS_PIN_IP,
+                    )
+                    continue
+
     if last_exc:
         raise last_exc
+
     raise TelegramWebSocketError("No WSS domains available")
 
 
@@ -437,9 +498,17 @@ async def run_proxy(cfg: LocalConfig, stop_event: Optional[asyncio.Event] = None
     if cfg.route_mode == "cloudflare":
         log.info("Route: Cloudflare DNS proxy domain suffix %s", cfg.cf_domain)
     else:
-        log.info("Route: official Telegram WSS domains (%s); pin_ip=%s", cfg.domain_style, cfg.pin_telegram_ip)
+        log.info(
+            "Route: official Telegram WSS domains (%s); pin_ip=%s auto_pin_fallback=%s",
+            cfg.domain_style,
+            cfg.pin_telegram_ip,
+            cfg.auto_pin_fallback,
+        )
+
         if cfg.pin_telegram_ip:
             log.info("Pinned WSS connect_host: %s", FLOWSEAL_WS_PIN_IP)
+        elif cfg.auto_pin_fallback:
+            log.info("Automatic pinned WSS fallback IP: %s", FLOWSEAL_WS_PIN_IP)
     log.info("Supports dd secret: dd%s", cfg.secret_hex)
     if cfg.fake_tls_domain:
         log.info("Supports ee FakeTLS secret with SNI: %s", cfg.fake_tls_domain)
@@ -482,6 +551,11 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument("--cf-domain", default="", help="Domain suffix for Cloudflare DNS proxy mode, e.g. example.com")
     ap.add_argument("--pin-telegram-ip", action="store_true", help="Connect to Flowseal-style pinned Telegram web IP while keeping WSS SNI/Host")
     ap.add_argument("--no-pin-telegram-ip", action="store_true", help="Deprecated; normal DNS is the default")
+    ap.add_argument(
+        "--no-auto-pin-fallback",
+        action="store_true",
+        help="Do not automatically fallback to pinned Telegram web IP when normal DNS WSS path fails",
+    )
     ap.add_argument("--domain-style", choices=["kws", "names"], default="kws", help="Use kwsN or official pluto/venus names")
     ap.add_argument("--no-direct-fallback", action="store_true", help="Do not fallback to direct Telegram TCP if WSS fails")
     ap.add_argument("--dc-ip", action="append", default=[], metavar="DC:IP", help="Override Telegram DC IP")
@@ -507,6 +581,7 @@ def main() -> None:
         route_mode=args.route_mode,
         cf_domain=args.cf_domain.strip().lower(),
         pin_telegram_ip=bool(args.pin_telegram_ip) and not bool(args.no_pin_telegram_ip),
+        auto_pin_fallback=not args.no_auto_pin_fallback,
         domain_style=args.domain_style,
         direct_fallback=not args.no_direct_fallback,
         dc_ips=parse_dc_ip_overrides(args.dc_ip),

@@ -1,75 +1,93 @@
 @echo off
-setlocal EnableExtensions
+setlocal
 
-chcp 65001 >nul
 cd /d "%~dp0"
 
-title tunnelgram
+set "APP_NAME=tunnelgram"
+set "VENV_DIR=.venv"
+set "VENV_PY=%VENV_DIR%\Scripts\python.exe"
+set "VENV_PYW=%VENV_DIR%\Scripts\pythonw.exe"
 
-echo ==================================================
-echo   tunnelgram - setup and run
-echo ==================================================
-echo.
+echo Starting %APP_NAME%...
 
+REM If virtual environment already exists, use it immediately.
+if exist "%VENV_PY%" (
+    goto run_app
+)
+
+REM Find Python only when .venv does not exist yet.
 set "PYTHON_CMD="
 
+where py >nul 2>nul
+if not errorlevel 1 (
+    set "PYTHON_CMD=py -3"
+    goto create_venv
+)
+
 where python >nul 2>nul
-if %errorlevel%==0 (
+if not errorlevel 1 (
     set "PYTHON_CMD=python"
-    goto :python_found
+    goto create_venv
 )
 
 where python3 >nul 2>nul
-if %errorlevel%==0 (
+if not errorlevel 1 (
     set "PYTHON_CMD=python3"
-    goto :python_found
+    goto create_venv
 )
 
-echo Python was not found.
-echo Trying to install Python 3.12 via winget...
 echo.
-
-where winget >nul 2>nul
-if not %errorlevel%==0 (
-    echo winget was not found.
-    echo Please install Python manually from https://www.python.org/downloads/
-    echo During installation enable: Add python.exe to PATH
-    pause
-    exit /b 1
-)
-
-winget install -e --id Python.Python.3.12
-
+echo ERROR: Python was not found.
+echo Install Python 3.10+ and make sure "Add Python to PATH" is enabled.
 echo.
-echo Python installation finished.
-echo Close this window, open run_windows.bat again.
-pause
-exit /b 0
+echo If you already have Python installed, try opening a new terminal and run:
+echo   python --version
+echo   py -3 --version
+goto error
 
-:python_found
-echo Found Python:
-%PYTHON_CMD% --version
-echo.
+:create_venv
+echo Creating virtual environment...
+%PYTHON_CMD% -m venv "%VENV_DIR%"
+if errorlevel 1 goto error
 
-if not exist ".venv\Scripts\python.exe" (
-    echo Creating virtual environment...
-    %PYTHON_CMD% -m venv .venv
-
-    if not exist ".venv\Scripts\python.exe" (
-        echo Failed to create virtual environment.
-        pause
-        exit /b 1
-    )
-)
-
-echo Upgrading pip...
-".venv\Scripts\python.exe" -m pip install --upgrade pip
-
-echo.
 echo Installing dependencies...
-".venv\Scripts\python.exe" -m pip install -r requirements.txt
+"%VENV_PY%" -m pip install --upgrade pip
+if errorlevel 1 goto error
 
-echo.
-echo Starting tunnelgram...
-start "" ".venv\Scripts\pythonw.exe" -m tunnelgram.gui
+"%VENV_PY%" -m pip install -r requirements.txt
+if errorlevel 1 goto error
+
+:run_app
+echo Checking app files...
+
+"%VENV_PY%" -m py_compile tunnelgram\gui.py
+if errorlevel 1 goto error
+
+"%VENV_PY%" -m py_compile tunnelgram\local_proxy.py
+if errorlevel 1 goto error
+
+"%VENV_PY%" -m py_compile tunnelgram\diagnostics.py
+if errorlevel 1 goto error
+
+echo Launching %APP_NAME%...
+
+if exist "%VENV_PYW%" (
+    start "" "%VENV_PYW%" -m tunnelgram.gui
+) else (
+    start "" "%VENV_PY%" -m tunnelgram.gui
+)
+
+if errorlevel 1 goto error
+
 exit /b 0
+
+:error
+echo.
+echo ============================================================
+echo %APP_NAME% failed to start.
+echo.
+echo The console will stay open so you can copy the error above.
+echo ============================================================
+echo.
+pause
+exit /b 1

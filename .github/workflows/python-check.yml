@@ -11,18 +11,13 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: "pip"
-
-      - name: Install system tkinter package
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3-tk
 
       - name: Install Python dependencies
         run: |
@@ -33,14 +28,18 @@ jobs:
         run: |
           python -m compileall tunnelgram
 
-      - name: Import project modules
+      - name: Import core project modules
         run: |
           python - <<'PY'
           import importlib
 
           modules = [
-              "tunnelgram.gui",
-              "tunnelgram.proxy",
+              "tunnelgram",
+              "tunnelgram.local_proxy",
+              "tunnelgram.telegram_ws",
+              "tunnelgram.mtproto",
+              "tunnelgram.faketls",
+              "tunnelgram.diagnostics",
           ]
 
           for name in modules:

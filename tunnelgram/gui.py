@@ -21,11 +21,21 @@ import tkinter as tk
 from tkinter import END, BooleanVar, StringVar, Toplevel, messagebox, filedialog
 from tkinter.scrolledtext import ScrolledText
 
+from . import __version__
 from .faketls import build_faketls_secret_hex, hostname_to_hex
 from .mtproto import generate_secret_hex, telegram_link, validate_secret_hex
+from .proxy_profiles import (
+    ProxyProfileError,
+    build_singbox_config,
+    find_sing_box_binary,
+    parse_proxy_uri,
+    redact_proxy_uri,
+    telegram_socks_link,
+    write_singbox_runtime_config,
+)
 
 APP_NAME = "tunnelgram"
-VERSION = "0.1.2"
+VERSION = __version__
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 GITHUB_REPO = "youngchasy/tunnelgram"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
@@ -139,6 +149,8 @@ TRANSLATIONS = {
         "status_secret_rejected": "Secret не принят",
         "status_network_problem": "Проблема сети",
         "status_wss_available": "WSS доступен",
+        "status_profile_valid": "Профиль корректен",
+        "status_checking_profile": "Проверяю профиль…",
         "status_wss_not_found": "WSS не найден",
         "status_check_error": "Ошибка проверки",
         "status_no_connections": "Нет подключений",
@@ -168,6 +180,24 @@ TRANSLATIONS = {
 
         "settings_window_title": "Настройки tunnelgram",
         "basic": "Основное",
+        "program_mode": "Режим программы",
+        "mode_mtproto": "MTProto → Telegram WSS (старый режим)",
+        "mode_local_proxy": "Локальный HTTP/SOCKS5 через внешний профиль",
+        "upstream_proxy_uri": "Ссылка подключения (HTTP, SOCKS5, VLESS или Hysteria2)",
+        "upstream_proxy_hint": "Примеры: socks5://user:pass@host:1080, http://host:8080, vless://..., hysteria2://...",
+        "local_proxy_username": "Локальный логин (необязательно)",
+        "local_proxy_password": "Локальный пароль (необязательно)",
+        "sing_box_path": "Путь к sing-box (обычно определяется автоматически)",
+        "browse": "Обзор",
+        "sing_box_files": "sing-box executable",
+        "profile_required": "Для режима локальной прокси нужна ссылка HTTP/SOCKS5/VLESS/Hysteria2.",
+        "local_auth_pair": "Локальный логин и пароль нужно задавать вместе.",
+        "sing_box_missing": "Не найден sing-box core. Положи sing-box рядом с tunnelgram или выбери файл в настройках.",
+        "profile_valid": "Профиль корректен: {name}",
+        "profile_check_failed": "Проверка профиля не пройдена: {error}",
+        "local_proxy_ready": "Локальная HTTP/SOCKS5 прокси готова. Добавь в Telegram SOCKS5 {host}:{port}.",
+        "proxy_mode_local_only": "В режиме локальной прокси адрес должен быть 127.0.0.1, localhost или ::1.",
+        "checking_proxy_profile": "Проверяю профиль через sing-box…",
         "address": "Адрес",
         "port": "Порт",
         "secret_label": "Secret (рекомендуется изменить)",
@@ -245,10 +275,10 @@ TRANSLATIONS = {
 
         "about": "О программе",
         "about_title": "О tunnelgram",
-        "about_description": "Локальный MTProto-прокси для Telegram Desktop через Telegram WSS endpoint’ы.",
+        "about_description": "Локальный MTProto/WSS-мост и HTTP/SOCKS5-прокси для Telegram Desktop.",
         "about_version": "Версия: v{version}",
         "about_repo": "GitHub: {repo}",
-        "about_license": "Лицензия: MIT",
+        "about_license": "tunnelgram: MIT; sing-box: GPLv3+ — см. THIRD_PARTY_NOTICES.md",
         "open_github": "Открыть GitHub",
         "open_releases": "Открыть Releases",
         "open_latest_release": "Открыть последний релиз",
@@ -282,6 +312,8 @@ TRANSLATIONS = {
         "status_secret_rejected": "Secret rejected",
         "status_network_problem": "Network problem",
         "status_wss_available": "WSS available",
+        "status_profile_valid": "Profile is valid",
+        "status_checking_profile": "Checking profile…",
         "status_wss_not_found": "WSS not found",
         "status_check_error": "Check failed",
         "status_no_connections": "No connections",
@@ -311,6 +343,24 @@ TRANSLATIONS = {
 
         "settings_window_title": "tunnelgram settings",
         "basic": "Basic",
+        "program_mode": "Program mode",
+        "mode_mtproto": "MTProto → Telegram WSS (legacy mode)",
+        "mode_local_proxy": "Local HTTP/SOCKS5 through an upstream profile",
+        "upstream_proxy_uri": "Connection URI (HTTP, SOCKS5, VLESS or Hysteria2)",
+        "upstream_proxy_hint": "Examples: socks5://user:pass@host:1080, http://host:8080, vless://..., hysteria2://...",
+        "local_proxy_username": "Local username (optional)",
+        "local_proxy_password": "Local password (optional)",
+        "sing_box_path": "sing-box path (normally detected automatically)",
+        "browse": "Browse",
+        "sing_box_files": "sing-box executable",
+        "profile_required": "Local proxy mode requires an HTTP/SOCKS5/VLESS/Hysteria2 URI.",
+        "local_auth_pair": "Local username and password must be set together.",
+        "sing_box_missing": "sing-box core was not found. Put sing-box next to tunnelgram or select it in settings.",
+        "profile_valid": "Profile is valid: {name}",
+        "profile_check_failed": "Profile check failed: {error}",
+        "local_proxy_ready": "Local HTTP/SOCKS5 proxy is ready. Add SOCKS5 {host}:{port} in Telegram.",
+        "proxy_mode_local_only": "Local proxy mode must listen on 127.0.0.1, localhost or ::1.",
+        "checking_proxy_profile": "Checking the profile with sing-box…",
         "address": "Address",
         "port": "Port",
         "secret_label": "Secret (recommended to change)",
@@ -388,10 +438,10 @@ TRANSLATIONS = {
 
         "about": "About",
         "about_title": "About tunnelgram",
-        "about_description": "Local MTProto proxy for Telegram Desktop through Telegram WSS endpoints.",
+        "about_description": "Local MTProto/WSS bridge and HTTP/SOCKS5 proxy for Telegram Desktop.",
         "about_version": "Version: v{version}",
         "about_repo": "GitHub: {repo}",
-        "about_license": "License: MIT",
+        "about_license": "tunnelgram: MIT; sing-box: GPLv3+ — see THIRD_PARTY_NOTICES.md",
         "open_github": "Open GitHub",
         "open_releases": "Open Releases",
         "open_latest_release": "Open latest release",
@@ -440,6 +490,7 @@ def old_config_path() -> Path:
 
 
 DEFAULT_CONFIG = {
+    "app_mode": "mtproto",
     "listen_host": "127.0.0.1",
     "listen_port": "9443",
     "secret": WORKING_DEFAULT_SECRET,
@@ -450,6 +501,10 @@ DEFAULT_CONFIG = {
     "pin_telegram_ip": False,
     "domain_style": "kws",
     "direct_fallback": False,
+    "upstream_proxy_uri": "",
+    "local_proxy_username": "",
+    "local_proxy_password": "",
+    "sing_box_path": "",
     "theme": "dark",
     "language": "ru",
     "check_updates": True,
@@ -535,6 +590,8 @@ class App(tk.Tk):
         self.setup_window_icon()
 
         self.proc: subprocess.Popen | None = None
+        self._proc_uses_sing_box = False
+        self._sing_box_runtime_config: Path | None = None
         self.log_queue: queue.Queue[str] = queue.Queue()
         self.tray_icon = None
         self.tray_thread: threading.Thread | None = None
@@ -552,6 +609,7 @@ class App(tk.Tk):
         self._log_prune_every = 25
         self._log_lines_since_prune = 0
 
+        self.app_mode = StringVar(value=cfg.get("app_mode", DEFAULT_CONFIG["app_mode"]))
         self.listen_host = StringVar(value=cfg.get("listen_host", DEFAULT_CONFIG["listen_host"]))
         self.listen_port = StringVar(value=str(cfg.get("listen_port", DEFAULT_CONFIG["listen_port"])))
         self.secret = StringVar(value=cfg.get("secret", DEFAULT_CONFIG["secret"]))
@@ -562,6 +620,10 @@ class App(tk.Tk):
         self.pin_telegram_ip = BooleanVar(value=bool(cfg.get("pin_telegram_ip", DEFAULT_CONFIG["pin_telegram_ip"])))
         self.domain_style = StringVar(value=cfg.get("domain_style", DEFAULT_CONFIG["domain_style"]))
         self.direct_fallback = BooleanVar(value=bool(cfg.get("direct_fallback", DEFAULT_CONFIG["direct_fallback"])))
+        self.upstream_proxy_uri = StringVar(value=cfg.get("upstream_proxy_uri", DEFAULT_CONFIG["upstream_proxy_uri"]))
+        self.local_proxy_username = StringVar(value=cfg.get("local_proxy_username", DEFAULT_CONFIG["local_proxy_username"]))
+        self.local_proxy_password = StringVar(value=cfg.get("local_proxy_password", DEFAULT_CONFIG["local_proxy_password"]))
+        self.sing_box_path = StringVar(value=cfg.get("sing_box_path", DEFAULT_CONFIG["sing_box_path"]))
         self.check_updates = BooleanVar(value=bool(cfg.get("check_updates", DEFAULT_CONFIG["check_updates"])))
         self.theme_name = StringVar(value=cfg.get("theme", DEFAULT_CONFIG["theme"]) if cfg.get("theme", "") in THEMES else "dark")
         self.autostart = BooleanVar(
@@ -598,8 +660,9 @@ class App(tk.Tk):
         self.after(1500, self.check_updates_on_startup)
 
         for var in (
-            self.listen_host, self.listen_port, self.secret, self.secret_mode,
+            self.app_mode, self.listen_host, self.listen_port, self.secret, self.secret_mode,
             self.fake_tls_domain, self.route_mode, self.cf_domain, self.domain_style,
+            self.upstream_proxy_uri, self.local_proxy_username, self.local_proxy_password, self.sing_box_path,
         ):
             var.trace_add("write", lambda *_: self.refresh_summary())
         self.pin_telegram_ip.trace_add("write", lambda *_: self.refresh_summary())
@@ -685,16 +748,21 @@ class App(tk.Tk):
         return path
     
     def set_linux_autostart(self, enabled: bool) -> None:
-        script = self.ensure_unix_autostart_script()
-
         if enabled:
             LINUX_AUTOSTART_DIR.mkdir(parents=True, exist_ok=True)
+
+            if is_frozen_app():
+                executable = str(Path(sys.executable).resolve())
+                escaped = executable.replace("\\", "\\\\").replace('"', '\\"')
+                exec_value = f'"{escaped}"'
+            else:
+                exec_value = str(self.ensure_unix_autostart_script())
 
             content = f"""[Desktop Entry]
     Type=Application
     Name=tunnelgram
     Comment=Start tunnelgram on login
-    Exec={script}
+    Exec={exec_value}
     Terminal=false
     X-GNOME-Autostart-enabled=true
     """
@@ -711,19 +779,23 @@ class App(tk.Tk):
         return LINUX_DESKTOP_FILE.exists()
     
     def set_macos_autostart(self, enabled: bool) -> None:
-        script = self.ensure_unix_autostart_script()
-
         if enabled:
             MACOS_LAUNCH_AGENTS_DIR.mkdir(parents=True, exist_ok=True)
 
+            if is_frozen_app():
+                executable = Path(sys.executable).resolve()
+                program_arguments = [str(executable)]
+                working_directory = str(executable.parent)
+            else:
+                script = self.ensure_unix_autostart_script()
+                program_arguments = ["/bin/bash", str(script)]
+                working_directory = str(PROJECT_ROOT)
+
             plist_data = {
                 "Label": "com.tunnelgram.app",
-                "ProgramArguments": [
-                    "/bin/bash",
-                    str(script),
-                ],
+                "ProgramArguments": program_arguments,
                 "RunAtLoad": True,
-                "WorkingDirectory": str(PROJECT_ROOT),
+                "WorkingDirectory": working_directory,
                 "StandardOutPath": "/tmp/tunnelgram.out.log",
                 "StandardErrorPath": "/tmp/tunnelgram.err.log",
             }
@@ -759,6 +831,7 @@ class App(tk.Tk):
 
     def current_config(self) -> dict:
         return {
+            "app_mode": self.app_mode.get().strip() or "mtproto",
             "listen_host": self.listen_host.get().strip() or DEFAULT_CONFIG["listen_host"],
             "listen_port": self.listen_port.get().strip() or DEFAULT_CONFIG["listen_port"],
             "secret": self.secret.get().strip(),
@@ -769,6 +842,10 @@ class App(tk.Tk):
             "pin_telegram_ip": bool(self.pin_telegram_ip.get()),
             "domain_style": self.domain_style.get().strip() or "kws",
             "direct_fallback": bool(self.direct_fallback.get()),
+            "upstream_proxy_uri": self.upstream_proxy_uri.get().strip(),
+            "local_proxy_username": self.local_proxy_username.get(),
+            "local_proxy_password": self.local_proxy_password.get(),
+            "sing_box_path": self.sing_box_path.get().strip(),
             "check_updates": bool(self.check_updates.get()),
             "theme": self.theme_name.get(),
             "language": self.language.get() if self.language.get() in LANGUAGES else DEFAULT_CONFIG["language"],
@@ -781,6 +858,11 @@ class App(tk.Tk):
 
         cfg = self.current_config()
         CONFIG_PATH.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+        if os.name != "nt":
+            try:
+                CONFIG_PATH.chmod(0o600)
+            except OSError:
+                pass
         self._current_cfg = cfg
 
         self.sync_system_autostart()
@@ -813,6 +895,9 @@ class App(tk.Tk):
 
 
     def windows_autostart_command(self) -> str:
+        if is_frozen_app():
+            return f'"{Path(sys.executable).resolve()}"'
+
         launcher = self.ensure_hidden_launcher()
         return f'wscript.exe //B //Nologo "{launcher}"'
 
@@ -928,6 +1013,8 @@ class App(tk.Tk):
             "status_secret_rejected",
             "status_network_problem",
             "status_wss_available",
+            "status_profile_valid",
+            "status_checking_profile",
             "status_wss_not_found",
             "status_check_error",
             "status_no_connections",
@@ -1428,11 +1515,19 @@ class App(tk.Tk):
         route.columnconfigure(1, weight=1)
 
         self.make_label(basic, self.tr("basic"), role="text", size=13, weight="bold", bg="card").grid(row=0, column=0, columnspan=3, sticky="w", padx=18, pady=(18, 10))
-        self.add_entry(basic, 1, self.tr("address"), self.listen_host)
-        self.add_entry(basic, 2, self.tr("port"), self.listen_port)
+
+        app_mode_box = tk.Frame(basic, bd=0)
+        self.watch(app_mode_box, "card")
+        app_mode_box.grid(row=1, column=0, columnspan=2, sticky="ew", padx=18, pady=(8, 10))
+        self.make_caption(app_mode_box, self.tr("program_mode"), bg="card").grid(row=0, column=0, sticky="w", pady=(0, 8))
+        self.add_radio(app_mode_box, self.tr("mode_mtproto"), self.app_mode, "mtproto").grid(row=1, column=0, sticky="w")
+        self.add_radio(app_mode_box, self.tr("mode_local_proxy"), self.app_mode, "proxy").grid(row=2, column=0, sticky="w", pady=(6, 0))
+
+        self.add_entry(basic, 2, self.tr("address"), self.listen_host)
+        self.add_entry(basic, 3, self.tr("port"), self.listen_port)
         self.add_entry_with_button(
             basic,
-            3,
+            4,
             self.tr("secret_label"),
             self.secret,
             button_text="↻",
@@ -1444,7 +1539,7 @@ class App(tk.Tk):
         secret_type_box = tk.Frame(basic, bd=0)
         self.watch(secret_type_box, "card")
         secret_type_box.grid(
-            row=5,
+            row=6,
             column=0,
             columnspan=2,
             sticky="ew",
@@ -1470,12 +1565,37 @@ class App(tk.Tk):
         self.add_radio(mode_box, "Fake TLS", self.secret_mode, "ee").pack(side="left")
         self.add_radio(mode_box, "Classic", self.secret_mode, "dd").pack(side="left", padx=(18, 0))
 
-        self.add_entry(basic, 6, "SNI", self.fake_tls_domain)
+        self.add_entry(basic, 7, "SNI", self.fake_tls_domain)
+        self.add_entry(basic, 8, self.tr("upstream_proxy_uri"), self.upstream_proxy_uri)
+        self.add_entry(basic, 9, self.tr("local_proxy_username"), self.local_proxy_username)
+        self.add_entry(basic, 10, self.tr("local_proxy_password"), self.local_proxy_password)
+        self.add_entry_with_button(
+            basic,
+            11,
+            self.tr("sing_box_path"),
+            self.sing_box_path,
+            button_text=self.tr("browse"),
+            button_command=self.select_sing_box_binary,
+            button_kind="secondary",
+            button_width=8,
+        )
+        proxy_hint = tk.Frame(basic, bd=0)
+        self.watch(proxy_hint, "card")
+        proxy_hint.grid(row=12, column=0, columnspan=2, sticky="ew", padx=18, pady=(0, 8))
+        self.make_label(
+            proxy_hint,
+            self.tr("upstream_proxy_hint"),
+            role="muted",
+            size=8,
+            bg="card",
+            wraplength=330,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
 
         autostart_box = tk.Frame(basic, bd=0)
         self.watch(autostart_box, "card")
         autostart_box.grid(
-            row=7,
+            row=13,
             column=0,
             columnspan=2,
             sticky="ew",
@@ -1501,7 +1621,7 @@ class App(tk.Tk):
         updates_box = tk.Frame(basic, bd=0)
         self.watch(updates_box, "card")
         updates_box.grid(
-            row=8,
+            row=14,
             column=0,
             columnspan=2,
             sticky="ew",
@@ -1878,25 +1998,32 @@ class App(tk.Tk):
 
     # ── state/logs ─────────────────────────────────────────────────────────
     def refresh_summary(self) -> None:
-        try:
-            full = self.current_full_secret()
-        except Exception:
-            full = ""
-        self.full_secret.set(full)
+        if self.app_mode.get() == "proxy":
+            self.full_secret.set("")
+            profile = redact_proxy_uri(self.upstream_proxy_uri.get()) or self.tr("profile_required")
+            self.quick_settings.set(
+                f"{self.listen_host.get()}:{self.listen_port.get()}  ·  HTTP/SOCKS5  ·  {profile}"
+            )
+        else:
+            try:
+                full = self.current_full_secret()
+            except Exception:
+                full = ""
+            self.full_secret.set(full)
 
-        mode = "Fake TLS" if self.secret_mode.get() == "ee" else "Classic"
-        route = "Direct WSS" if self.route_mode.get() == "telegram" else "Cloudflare DNS"
-        style = "kws" if self.domain_style.get() == "kws" else "names"
-        self.quick_settings.set(
-            f"{self.listen_host.get()}:{self.listen_port.get()}  ·  {mode}  ·  {route}/{style}  ·  "
-            f"Pin IP {fmt_bool(self.pin_telegram_ip.get(), self.language.get())}  ·  TCP fallback {fmt_bool(self.direct_fallback.get(), self.language.get())}"
-        )
+            mode = "Fake TLS" if self.secret_mode.get() == "ee" else "Classic"
+            route = "Direct WSS" if self.route_mode.get() == "telegram" else "Cloudflare DNS"
+            style = "kws" if self.domain_style.get() == "kws" else "names"
+            self.quick_settings.set(
+                f"{self.listen_host.get()}:{self.listen_port.get()}  ·  {mode}  ·  {route}/{style}  ·  "
+                f"Pin IP {fmt_bool(self.pin_telegram_ip.get(), self.language.get())}  ·  TCP fallback {fmt_bool(self.direct_fallback.get(), self.language.get())}"
+            )
         running = bool(self.proc and self.proc.poll() is None)
         self.toggle_text.set(self.tr("toggle_off") if running else self.tr("toggle_on"))
         if hasattr(self, "toggle_btn"):
             # Blue when idle, red when running.
             kind = "danger" if running else "primary"
-            for i, (btn, k) in enumerate(self._buttons):
+            for i, (btn, _current_kind) in enumerate(self._buttons):
                 if btn is self.toggle_btn:
                     self._buttons[i] = (btn, kind)
                     break
@@ -2059,6 +2186,31 @@ class App(tk.Tk):
         if stripped == "__STATUS_WSS_FAIL__":
             self.telegram_status.set(self.tr("status_check_error"))
             return False
+        if stripped == "__STATUS_PROXY_PROFILE_OK__":
+            self.telegram_status.set(self.tr("status_profile_valid"))
+            return False
+        if stripped == "__STATUS_PROXY_PROFILE_FAIL__":
+            self.telegram_status.set(self.tr("status_check_error"))
+            return False
+
+        lower = line.lower()
+        if self.app_mode.get() == "proxy":
+            if "started" in lower or "inbound/mixed" in lower or "mixed-in" in lower:
+                self.status.set(self.tr("status_running"))
+            if ("inbound/mixed" in lower or "mixed-in" in lower) and any(
+                marker in lower for marker in ("connection", "accepted", "new connection")
+            ):
+                self.telegram_status.set(self.tr("status_connected"))
+                try:
+                    n = int(self.active_status.get())
+                    self.active_status.set(str(max(1, n)))
+                except ValueError:
+                    self.active_status.set("1")
+            if "error" in lower and "deprecated" not in lower:
+                try:
+                    self.errors_status.set(str(int(self.errors_status.get()) + 1))
+                except ValueError:
+                    self.errors_status.set("1")
 
         if "local proxy listening" in line:
             self.status.set(self.tr("status_running"))
@@ -2298,9 +2450,15 @@ class App(tk.Tk):
                 json.dumps(cfg, indent=2, ensure_ascii=False),
                 encoding="utf-8",
             )
+            if os.name != "nt":
+                try:
+                    CONFIG_PATH.chmod(0o600)
+                except OSError:
+                    pass
         except Exception:
             pass
 
+        self.app_mode.set(str(cfg["app_mode"]))
         self.listen_host.set(str(cfg["listen_host"]))
         self.listen_port.set(str(cfg["listen_port"]))
         self.secret.set(str(cfg["secret"]))
@@ -2311,6 +2469,10 @@ class App(tk.Tk):
         self.pin_telegram_ip.set(bool(cfg["pin_telegram_ip"]))
         self.domain_style.set(str(cfg["domain_style"]))
         self.direct_fallback.set(bool(cfg["direct_fallback"]))
+        self.upstream_proxy_uri.set(str(cfg["upstream_proxy_uri"]))
+        self.local_proxy_username.set(str(cfg["local_proxy_username"]))
+        self.local_proxy_password.set(str(cfg["local_proxy_password"]))
+        self.sing_box_path.set(str(cfg["sing_box_path"]))
         self.autostart.set(bool(cfg["autostart"]))
         self.theme_name.set(str(cfg["theme"]))
         self.language.set(str(cfg["language"]))
@@ -2479,14 +2641,47 @@ class App(tk.Tk):
         self.check_updates_now(manual=False)
 
     # ── actions ────────────────────────────────────────────────────────────
+    def select_sing_box_binary(self) -> None:
+        path = filedialog.askopenfilename(
+            title=self.tr("sing_box_path"),
+            filetypes=[
+                (self.tr("sing_box_files"), "sing-box*"),
+                (self.tr("all_files"), "*"),
+            ],
+            parent=self._settings_win if self._settings_win and self._settings_win.winfo_exists() else self,
+        )
+        if path:
+            self.sing_box_path.set(path)
+
     def validate_fields(self) -> None:
-        validate_secret_hex(self.secret.get())
         try:
             port = int(self.listen_port.get().strip())
         except Exception as exc:
             raise ValueError(self.tr("port_must_be_number")) from exc
         if not (1 <= port <= 65535):
             raise ValueError(self.tr("port_range"))
+
+        if self.app_mode.get() == "proxy":
+            host = self.listen_host.get().strip().lower()
+            if host not in {"127.0.0.1", "localhost", "::1"}:
+                raise ValueError(self.tr("proxy_mode_local_only"))
+            uri = self.upstream_proxy_uri.get().strip()
+            if not uri:
+                raise ValueError(self.tr("profile_required"))
+            try:
+                parse_proxy_uri(uri)
+            except ProxyProfileError as exc:
+                raise ValueError(str(exc)) from exc
+            username = self.local_proxy_username.get()
+            password = self.local_proxy_password.get()
+            if bool(username) != bool(password):
+                raise ValueError(self.tr("local_auth_pair"))
+            explicit = self.sing_box_path.get().strip()
+            if explicit and not Path(explicit).expanduser().is_file():
+                raise ValueError(self.tr("sing_box_missing"))
+            return
+
+        validate_secret_hex(self.secret.get())
         domain = self.fake_tls_domain.get().strip().lower()
         if domain:
             hostname_to_hex(domain)
@@ -2498,6 +2693,8 @@ class App(tk.Tk):
                 raise ValueError(self.tr("cf_suffix_required"))
 
     def current_full_secret(self) -> str:
+        if self.app_mode.get() == "proxy":
+            return ""
         secret = validate_secret_hex(self.secret.get())
         if self.secret_mode.get() == "ee":
             return build_faketls_secret_hex(secret, self.fake_tls_domain.get().strip().lower())
@@ -2506,6 +2703,13 @@ class App(tk.Tk):
     def current_link(self) -> str:
         host = self.listen_host.get().strip() or "127.0.0.1"
         port = int(self.listen_port.get().strip() or "9443")
+        if self.app_mode.get() == "proxy":
+            return telegram_socks_link(
+                host,
+                port,
+                self.local_proxy_username.get(),
+                self.local_proxy_password.get(),
+            )
         secret = validate_secret_hex(self.secret.get())
         mode = self.secret_mode.get().strip() or "dd"
         domain = self.fake_tls_domain.get().strip().lower()
@@ -2619,6 +2823,21 @@ class App(tk.Tk):
         else:
             self.start_proxy()
 
+    def cleanup_sing_box_runtime_config(self) -> None:
+        path = self._sing_box_runtime_config
+        self._sing_box_runtime_config = None
+        if path is None:
+            return
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    @staticmethod
+    def clean_sing_box_output(value: str) -> str:
+        # sing-box enables coloured fatal messages on some Windows builds.
+        return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value or "").strip()
+
     def start_proxy(self) -> None:
         if self.proc and self.proc.poll() is None:
             self.log(self.tr("proxy_already_started"), "muted")
@@ -2634,59 +2853,119 @@ class App(tk.Tk):
         self.active_status.set("0")
         self.traffic_status.set("↑ 0B   ↓ 0B")
 
-        cmd = proxy_command() + [
-            "--listen-host",
-            self.listen_host.get().strip(),
-            "--listen-port",
-            self.listen_port.get().strip(),
-            "--secret",
-            validate_secret_hex(self.secret.get()),
-            "--route-mode",
-            self.route_mode.get().strip(),
-            "--domain-style",
-            self.domain_style.get().strip() or "kws",
-        ]
-        domain = self.fake_tls_domain.get().strip().lower()
-        if domain:
-            cmd.extend(["--fake-tls-domain", domain])
-        if self.route_mode.get() == "cloudflare":
-            cmd.extend(["--cf-domain", self.cf_domain.get().strip().lower()])
-        if self.pin_telegram_ip.get():
-            cmd.append("--pin-telegram-ip")
+        if self.app_mode.get() == "proxy":
+            try:
+                binary = find_sing_box_binary(self.sing_box_path.get())
+                profile, config = build_singbox_config(
+                    self.upstream_proxy_uri.get(),
+                    listen_host=self.listen_host.get().strip(),
+                    listen_port=int(self.listen_port.get().strip()),
+                    local_username=self.local_proxy_username.get(),
+                    local_password=self.local_proxy_password.get(),
+                )
+                self.cleanup_sing_box_runtime_config()
+                config_path = write_singbox_runtime_config(config)
+                self._sing_box_runtime_config = config_path
+                check = subprocess.run(
+                    [str(binary), "check", "-c", str(config_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=20,
+                    **subprocess_window_kwargs(),
+                )
+                if check.returncode != 0:
+                    details = self.clean_sing_box_output(check.stdout) or f"exit code {check.returncode}"
+                    raise RuntimeError(details)
+                cmd = [str(binary), "run", "-c", str(config_path)]
+                self.log(self.tr("profile_valid", name=profile.name), "ok")
+            except FileNotFoundError:
+                self.cleanup_sing_box_runtime_config()
+                messagebox.showerror(APP_NAME, self.tr("sing_box_missing"))
+                return
+            except Exception as exc:
+                self.cleanup_sing_box_runtime_config()
+                messagebox.showerror(APP_NAME, self.tr("profile_check_failed", error=exc))
+                return
         else:
-            cmd.append("--no-pin-telegram-ip")
-        if not self.direct_fallback.get():
-            cmd.append("--no-direct-fallback")
+            cmd = proxy_command() + [
+                "--listen-host",
+                self.listen_host.get().strip(),
+                "--listen-port",
+                self.listen_port.get().strip(),
+                "--secret",
+                validate_secret_hex(self.secret.get()),
+                "--route-mode",
+                self.route_mode.get().strip(),
+                "--domain-style",
+                self.domain_style.get().strip() or "kws",
+            ]
+            domain = self.fake_tls_domain.get().strip().lower()
+            if domain:
+                cmd.extend(["--fake-tls-domain", domain])
+            if self.route_mode.get() == "cloudflare":
+                cmd.extend(["--cf-domain", self.cf_domain.get().strip().lower()])
+            if self.pin_telegram_ip.get():
+                cmd.append("--pin-telegram-ip")
+            else:
+                cmd.append("--no-pin-telegram-ip")
+            if not self.direct_fallback.get():
+                cmd.append("--no-direct-fallback")
+
+        self._proc_uses_sing_box = self.app_mode.get() == "proxy"
 
         try:
+            process_kwargs = subprocess_window_kwargs()
+            if self._proc_uses_sing_box:
+                process_kwargs.update({"encoding": "utf-8", "errors": "replace"})
+
             self.proc = subprocess.Popen(
                 cmd,
-                cwd=str(PROJECT_ROOT),
+                cwd=str(PROJECT_ROOT) if not self._proc_uses_sing_box else None,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                **subprocess_window_kwargs(),
+                **process_kwargs,
             )
         except Exception as exc:
+            if self.app_mode.get() == "proxy":
+                self.cleanup_sing_box_runtime_config()
             messagebox.showerror(APP_NAME, self.tr("proxy_start_failed", error=exc))
             return
 
         threading.Thread(target=self.reader_thread, daemon=True).start()
         self.status.set(self.tr("status_running"))
-        self.toggle_text.set("Выключить")
+        self.toggle_text.set(self.tr("toggle_off"))
         self.log(self.tr("proxy_started"), "ok")
+        if self.app_mode.get() == "proxy":
+            self.log(
+                self.tr(
+                    "local_proxy_ready",
+                    host=self.listen_host.get().strip(),
+                    port=self.listen_port.get().strip(),
+                ),
+                "ok",
+            )
         self.refresh_summary()
 
     def reader_thread(self) -> None:
         if not self.proc or not self.proc.stdout:
             return
         for line in self.proc.stdout:
+            if self._proc_uses_sing_box:
+                line = self.clean_sing_box_output(line)
+                if not line:
+                    continue
+                line += "\n"
             self.log_queue.put(line)
         self.log_queue.put("[process exited]\n")
 
     def stop_proxy(self) -> None:
         if not self.proc or self.proc.poll() is not None:
+            self.cleanup_sing_box_runtime_config()
             self.status.set(self.tr("status_stopped"))
             self.telegram_status.set(self.tr("status_no_connections"))
             self.active_status.set("0")
@@ -2698,16 +2977,65 @@ class App(tk.Tk):
             self.proc.wait(timeout=5)
         except subprocess.TimeoutExpired:
             self.proc.kill()
+        self.cleanup_sing_box_runtime_config()
         self.status.set(self.tr("status_stopped"))
         self.telegram_status.set(self.tr("status_no_connections"))
         self.active_status.set("0")
-        self.toggle_text.set("Включить")
+        self.toggle_text.set(self.tr("toggle_on"))
         self.refresh_summary()
         self.log(self.tr("proxy_stopped"), "muted")
 
     def check_wss(self) -> None:
-        language = self.language.get() if hasattr(self, "language") else "ru"
+        if self.app_mode.get() == "proxy":
+            try:
+                self.validate_fields()
+            except Exception as exc:
+                messagebox.showerror(APP_NAME, str(exc))
+                return
 
+            self.telegram_status.set(self.tr("status_checking_profile"))
+            self.log(self.tr("checking_proxy_profile"), "muted")
+
+            def run_profile_check() -> None:
+                try:
+                    binary = find_sing_box_binary(self.sing_box_path.get())
+                    profile, config = build_singbox_config(
+                        self.upstream_proxy_uri.get(),
+                        listen_host=self.listen_host.get().strip(),
+                        listen_port=int(self.listen_port.get().strip()),
+                        local_username=self.local_proxy_username.get(),
+                        local_password=self.local_proxy_password.get(),
+                    )
+                    config_path = write_singbox_runtime_config(config)
+                    try:
+                        result = subprocess.run(
+                            [str(binary), "check", "-c", str(config_path)],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT,
+                            text=True,
+                            encoding="utf-8",
+                            errors="replace",
+                            timeout=20,
+                            **subprocess_window_kwargs(),
+                        )
+                        if result.returncode != 0:
+                            details = self.clean_sing_box_output(result.stdout) or f"exit code {result.returncode}"
+                            raise RuntimeError(details)
+                        self.log_queue.put(self.tr("profile_valid", name=profile.name) + "\n")
+                        self.log_queue.put("__STATUS_PROXY_PROFILE_OK__\n")
+                    finally:
+                        try:
+                            config_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                except Exception as exc:
+                    self.log_queue.put(self.tr("profile_check_failed", error=exc) + "\n")
+                    self.log_queue.put("__STATUS_PROXY_PROFILE_FAIL__\n")
+
+            threading.Thread(target=run_profile_check, daemon=True).start()
+            return
+
+        language = self.language.get() if hasattr(self, "language") else "ru"
         cmd = diagnostics_command() + [
             "--domain-style",
             self.domain_style.get().strip() or "kws",
@@ -2743,14 +3071,11 @@ class App(tk.Tk):
                 if proc.stdout:
                     for line in proc.stdout:
                         stripped = line.strip()
-
                         if stripped == "__DIAG_WSS_OK__":
                             ok_seen = True
                             continue
-
                         if stripped == "__DIAG_WSS_FAIL__":
                             continue
-
                         self.log_queue.put(line)
                 proc.wait(timeout=90)
                 self.log_queue.put("__STATUS_WSS_OK__\n" if ok_seen else "__STATUS_WSS_DONE__\n")
@@ -2899,6 +3224,8 @@ class App(tk.Tk):
         try:
             if self.proc and self.proc.poll() is None:
                 self.stop_proxy()
+            else:
+                self.cleanup_sing_box_runtime_config()
 
             self.clear_logs_on_exit()
         finally:

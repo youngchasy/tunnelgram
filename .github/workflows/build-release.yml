@@ -1,20 +1,35 @@
 name: Build release binaries
+run-name: Build tunnelgram ${{ github.ref_name }}
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: "Upload the archives to a GitHub Release"
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: "Release tag for manual upload, for example v2.0"
+        required: false
+        default: ""
+        type: string
   push:
     tags:
       - "v*"
-  release:
-    types: [published]
 
 permissions:
   contents: write
+
+env:
+  PYTHON_VERSION: "3.12"
+  SING_BOX_VERSION: "1.13.14"
 
 jobs:
   build:
     name: Build ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
 
     strategy:
       fail-fast: false
@@ -23,24 +38,32 @@ jobs:
           - name: windows-x64
             os: windows-latest
             archive: tunnelgram-windows-x64.zip
+            core_asset: sing-box-1.13.14-windows-amd64.zip
 
           - name: linux-x64
-            os: ubuntu-latest
+            os: ubuntu-22.04
             archive: tunnelgram-linux-x64.tar.gz
+            core_asset: sing-box-1.13.14-linux-amd64.tar.gz
 
-          - name: macos
+          - name: macos-arm64
             os: macos-latest
-            archive: tunnelgram-macos.zip
+            archive: tunnelgram-macos-arm64.zip
+            core_asset: sing-box-1.13.14-darwin-arm64.tar.gz
+
+          - name: macos-x64
+            os: macos-15-intel
+            archive: tunnelgram-macos-x64.zip
+            core_asset: sing-box-1.13.14-darwin-amd64.tar.gz
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
-          cache: "pip"
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
 
       - name: Install Linux system packages
         if: runner.os == 'Linux'
@@ -52,12 +75,42 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
-          python -m pip install "pyinstaller>=6.0"
+          python -m pip install "pyinstaller>=6.0" pytest
 
-      - name: Compile Python files
+      - name: Run checks
         run: |
           python -m compileall tunnelgram
           python -m py_compile tunnelgram_app.py
+          python -m pytest -q
+
+      - name: Download sing-box core on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $base = "https://github.com/SagerNet/sing-box/releases/download/v${{ env.SING_BOX_VERSION }}"
+          Invoke-WebRequest -Uri "$base/${{ matrix.core_asset }}" -OutFile sing-box-core.zip
+          Expand-Archive sing-box-core.zip -DestinationPath sing-box-core -Force
+          $core = Get-ChildItem sing-box-core -Recurse -File -Filter sing-box.exe | Select-Object -First 1
+          if (-not $core) { throw "sing-box.exe was not found in the downloaded archive" }
+          Copy-Item $core.FullName sing-box.exe
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SagerNet/sing-box/v${{ env.SING_BOX_VERSION }}/LICENSE" -OutFile sing-box-LICENSE.txt
+          .\sing-box.exe version
+
+      - name: Download sing-box core on Unix
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}"
+          curl -fL "$base/${{ matrix.core_asset }}" -o sing-box-core.tar.gz
+          mkdir -p sing-box-core
+          tar -xzf sing-box-core.tar.gz -C sing-box-core
+          core="$(find sing-box-core -type f -name sing-box -print -quit)"
+          test -n "$core"
+          cp "$core" sing-box
+          chmod +x sing-box
+          curl -fL "https://raw.githubusercontent.com/SagerNet/sing-box/v${SING_BOX_VERSION}/LICENSE" -o sing-box-LICENSE.txt
+          ./sing-box version
 
       - name: Build Windows executable
         if: runner.os == 'Windows'
@@ -73,15 +126,21 @@ jobs:
             --add-data "assets;assets" `
             tunnelgram_app.py
 
-          New-Item -ItemType Directory -Force release | Out-Null
-          Copy-Item dist/tunnelgram.exe release/tunnelgram.exe
-          if (Test-Path README.md) { Copy-Item README.md release/README.md }
-          if (Test-Path LICENSE) { Copy-Item LICENSE release/LICENSE }
-          Compress-Archive -Path release/* -DestinationPath "${{ matrix.archive }}" -Force
+          New-Item -ItemType Directory -Force release\THIRD_PARTY_LICENSES | Out-Null
+          Copy-Item dist\tunnelgram.exe release\tunnelgram.exe
+          Copy-Item sing-box.exe release\sing-box.exe
+          Copy-Item sing-box-LICENSE.txt release\THIRD_PARTY_LICENSES\sing-box-GPL-3.0.txt
+          if (Test-Path README.md) { Copy-Item README.md release\README.md }
+          if (Test-Path THIRD_PARTY_NOTICES.md) { Copy-Item THIRD_PARTY_NOTICES.md release\THIRD_PARTY_NOTICES.md }
+          if (Test-Path LICENSE) { Copy-Item LICENSE release\LICENSE }
+          "https://github.com/SagerNet/sing-box/tree/v${{ env.SING_BOX_VERSION }}" | Set-Content release\THIRD_PARTY_LICENSES\sing-box-source.txt
+          Compress-Archive -Path release\* -DestinationPath "${{ matrix.archive }}" -Force
 
       - name: Build Linux executable
         if: runner.os == 'Linux'
+        shell: bash
         run: |
+          set -euo pipefail
           pyinstaller \
             --noconfirm \
             --clean \
@@ -91,16 +150,22 @@ jobs:
             --add-data "assets:assets" \
             tunnelgram_app.py
 
-          mkdir -p release
+          mkdir -p release/THIRD_PARTY_LICENSES
           cp dist/tunnelgram release/tunnelgram
-          chmod +x release/tunnelgram
+          cp sing-box release/sing-box
+          chmod +x release/tunnelgram release/sing-box
+          cp sing-box-LICENSE.txt release/THIRD_PARTY_LICENSES/sing-box-GPL-3.0.txt
+          printf '%s\n' "https://github.com/SagerNet/sing-box/tree/v${SING_BOX_VERSION}" > release/THIRD_PARTY_LICENSES/sing-box-source.txt
           [ -f README.md ] && cp README.md release/README.md || true
+          [ -f THIRD_PARTY_NOTICES.md ] && cp THIRD_PARTY_NOTICES.md release/THIRD_PARTY_NOTICES.md || true
           [ -f LICENSE ] && cp LICENSE release/LICENSE || true
           tar -czf "${{ matrix.archive }}" -C release .
 
       - name: Build macOS app
         if: runner.os == 'macOS'
+        shell: bash
         run: |
+          set -euo pipefail
           pyinstaller \
             --noconfirm \
             --clean \
@@ -110,40 +175,72 @@ jobs:
             --add-data "assets:assets" \
             tunnelgram_app.py
 
-          codesign --force --deep --sign - "dist/tunnelgram.app"
+          app="dist/tunnelgram.app"
+          test -d "$app"
+          mkdir -p "$app/Contents/Resources"
+          cp sing-box "$app/Contents/Resources/sing-box"
+          chmod +x "$app/Contents/Resources/sing-box"
+          cp THIRD_PARTY_NOTICES.md "$app/Contents/Resources/THIRD_PARTY_NOTICES.md"
+          cp sing-box-LICENSE.txt "$app/Contents/Resources/sing-box-GPL-3.0.txt"
+          codesign --force --deep --sign - "$app"
 
-          mkdir -p release
-
-          if [ -d "dist/tunnelgram.app" ]; then
-            cp -R dist/tunnelgram.app release/tunnelgram.app
-            [ -f README.md ] && cp README.md release/README.md || true
-            [ -f LICENSE ] && cp LICENSE release/LICENSE || true
-            ditto -c -k --sequesterRsrc --keepParent release "${{ matrix.archive }}"
-          else
-            cp -R dist/tunnelgram release/tunnelgram
-            [ -f README.md ] && cp README.md release/README.md || true
-            [ -f LICENSE ] && cp LICENSE release/LICENSE || true
-            ditto -c -k --sequesterRsrc --keepParent release "${{ matrix.archive }}"
-          fi
+          mkdir -p release/THIRD_PARTY_LICENSES
+          cp -R "$app" release/tunnelgram.app
+          cp sing-box-LICENSE.txt release/THIRD_PARTY_LICENSES/sing-box-GPL-3.0.txt
+          printf '%s\n' "https://github.com/SagerNet/sing-box/tree/v${SING_BOX_VERSION}" > release/THIRD_PARTY_LICENSES/sing-box-source.txt
+          [ -f README.md ] && cp README.md release/README.md || true
+          [ -f THIRD_PARTY_NOTICES.md ] && cp THIRD_PARTY_NOTICES.md release/THIRD_PARTY_NOTICES.md || true
+          [ -f LICENSE ] && cp LICENSE release/LICENSE || true
+          (cd release && ditto -c -k --sequesterRsrc . "../${{ matrix.archive }}")
 
       - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive }}
+          name: ${{ matrix.name }}
           path: ${{ matrix.archive }}
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Upload to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release'
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Resolve release tag
+        id: tag
         shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ inputs.release_tag }}"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "release_tag is required when manual upload is enabled" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        shell: bash
         run: |
-          TAG="${GITHUB_REF_NAME}"
-
+          set -euo pipefail
           gh release view "$TAG" >/dev/null 2>&1 || \
             gh release create "$TAG" \
               --title "tunnelgram $TAG" \
-              --notes "Automated release build for $TAG."
-
-          gh release upload "$TAG" "${{ matrix.archive }}" --clobber
+              --notes "Automated cross-platform build for $TAG."
+          gh release upload "$TAG" release-assets/* --clobber

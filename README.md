@@ -1,834 +1,308 @@
-# tunnelgram
+# tunnelgram 2.0
 
-## Русский
+`tunnelgram` — локальное приложение для подключения Telegram Desktop. В версии 2.0 доступны два независимых режима работы:
 
-`tunnelgram` — это локальный прокси-клиент для Telegram Desktop.
-
-Он принимает локальное подключение Telegram Desktop на `127.0.0.1`, а затем передаёт зашифрованный MTProto-трафик через официальные Telegram WebSocket/WSS endpoint’ы.
+1. **MTProto → Telegram WSS** — прежняя локальная переадресация MTProto-трафика в официальные WSS endpoint’ы Telegram.
+2. **Локальная HTTP/SOCKS5-прокси** — приложение поднимает на компьютере один локальный порт, который одновременно принимает HTTP CONNECT и SOCKS4/4a/5. Внешним подключением может быть HTTP, SOCKS5, VLESS или Hysteria2.
 
 ```text
-Telegram Desktop
-→ 127.0.0.1:9443
-→ tunnelgram
-→ wss://kws*.web.telegram.org/apiws
-→ Telegram
+Режим MTProto
+Telegram Desktop → 127.0.0.1:9443 → tunnelgram → Telegram WSS
+
+Режим локальной прокси
+Telegram Desktop → SOCKS5 127.0.0.1:9443 → tunnelgram/sing-box → внешний профиль → интернет
+Другое приложение → HTTP 127.0.0.1:9443 ────────────────┘
 ```
 
-Главная идея: сторонний VPS или relay-сервер не нужен. Приложение работает локально и подключается напрямую к WebSocket-серверам Telegram.
+## Что нового в 2.0
 
----
+- переключатель режима программы;
+- входящие локальные HTTP и SOCKS5 на одном порту;
+- внешние профили `http://`, `https://`, `socks5://`, `vless://`, `hysteria2://` и `hy2://`;
+- VLESS с TLS/Reality и распространёнными транспортами WebSocket, gRPC, HTTPUpgrade, HTTP и QUIC;
+- Hysteria2 с TLS, bandwidth-параметрами, obfs и port hopping;
+- необязательная авторизация на локальной прокси;
+- автоматический поиск `sing-box` и возможность выбрать исполняемый файл вручную;
+- проверка создаваемой конфигурации командой `sing-box check` до запуска;
+- сборки Windows x64, Linux x64, macOS Apple Silicon и macOS Intel;
+- автоматическое добавление `sing-box` в каждый архив релиза;
+- unit-тесты для парсинга профилей и генерации конфигурации.
 
-## Возможности
+## Быстрый запуск готовой сборки
 
-- локальный MTProto-прокси для Telegram Desktop;
-- режим Telegram Direct WSS;
-- поддержка Classic `dd-secret`;
-- поддержка Fake TLS `ee-secret`;
-- запуск в трей;
-- проверка WSS-соединения;
-- экспорт логов;
-- скрипт запуска для Windows;
-- скрипт запуска для Linux/macOS;
-- опциональный автозапуск вместе с системой: Windows, Linux и macOS.
+Скачайте архив своей системы со страницы **Releases**, распакуйте его полностью и запускайте `tunnelgram`:
 
----
+- Windows: `tunnelgram.exe`;
+- Linux: `./tunnelgram`;
+- macOS: `tunnelgram.app`.
 
-## Быстрый запуск на Windows
+Не отделяйте `sing-box` от приложения. В Windows и Linux он лежит рядом с `tunnelgram`; в macOS он встроен в ресурсы `.app`.
 
-### Обычный запуск
+Сборки macOS подписываются локальной ad-hoc подписью, но не нотарифицируются Apple. При первом запуске может понадобиться открыть приложение через контекстное меню **Open / Открыть**.
 
-Откройте папку проекта и запустите:
+## Запуск из исходников
+
+Требуется Python 3.11+; в GitHub Actions используется Python 3.12.
+
+### Windows
 
 ```bat
 run_windows.bat
 ```
 
-Скрипт создаст виртуальное окружение Python, установит зависимости и запустит приложение.
-
-### Скрытый запуск без консоли
-
-Сначала один раз запустите обычный запуск:
-
-```bat
-run_windows.bat
-```
-
-После установки можно запускать:
+Для запуска без консольного окна после первой установки:
 
 ```text
 run_hidden.vbs
 ```
 
-Так приложение откроется без консольного окна.
-
----
-
-## Быстрый запуск на Linux / macOS
-
-В корне проекта сделайте скрипт исполняемым:
+### Linux / macOS
 
 ```bash
 chmod +x run_unix.sh
-```
-
-Запустите:
-
-```bash
 ./run_unix.sh
 ```
 
-Скрипт должен:
-
-1. найти `python3` или `python`;
-2. проверить наличие `tkinter` в системном Python;
-3. создать `.venv`;
-4. проверить наличие `tkinter` внутри `.venv`;
-5. обновить `pip`;
-6. установить зависимости из `requirements.txt`;
-7. проверить Python-файлы;
-8. запустить GUI.
-
-### Если на Linux нет tkinter
-
-Debian/Ubuntu:
+На Debian/Ubuntu при необходимости:
 
 ```bash
 sudo apt update
 sudo apt install python3 python3-venv python3-pip python3-tk
 ```
 
-Fedora:
+### sing-box при запуске из исходников
 
-```bash
-sudo dnf install python3 python3-pip python3-tkinter
-```
+Для нового режима нужен CLI core `sing-box`. Готовые GitHub-сборки уже содержат его. При запуске из исходников используйте один из вариантов:
 
-Arch:
+- положите `sing-box` или `sing-box.exe` в корень проекта;
+- установите его в `PATH`;
+- выберите файл в настройках tunnelgram;
+- задайте переменную окружения `TUNNELGRAM_SING_BOX`.
 
-```bash
-sudo pacman -S python tk
-```
+В автоматических сборках закреплена версия `sing-box 1.13.14`.
 
-### Если на macOS нет tkinter
+## Режим 1: MTProto → Telegram WSS
 
-Рекомендуется установить Python с официального сайта:
+1. Откройте **Настройки → Основное**.
+2. Выберите **MTProto → Telegram WSS**.
+3. Укажите локальный адрес и порт. Для обычного использования оставьте `127.0.0.1:9443`.
+4. Настройте secret, Fake TLS/SNI и маршрут.
+5. Нажмите **Включить**.
+6. Нажмите **Telegram**, чтобы открыть ссылку добавления локального MTProto-прокси.
 
-```text
-https://www.python.org/downloads/macos/
-```
-
-Или через Homebrew:
-
-```bash
-brew install python
-```
-
-После этого снова запустите:
-
-```bash
-./run_unix.sh
-```
-
-### Тихий скрипт для автозапуска
-
-Для автозапуска на Linux/macOS используется отдельный скрипт:
-
-```bash
-run_unix_autostart.sh
-```
-
-Он запускает приложение тише, без лишнего вывода в терминал, и подходит для запуска при входе в систему.
-
-Обычно создавать его вручную не нужно: приложение может создать его автоматически при включении автозапуска в настройках.
-
-Ошибки автозапуска на Linux/macOS записываются в лог:
+При ручной настройке Telegram:
 
 ```text
-~/.tunnelgram/autostart.log
-
----
-
-## Настройка Telegram Desktop
-
-В приложении нажмите:
-
-```text
-Включить
-```
-
-Затем нажмите:
-
-```text
-Telegram
-```
-
-Telegram должен предложить добавить локальный MTProto-прокси.
-
-Если настраиваете вручную:
-
-```text
+Type: MTProto
 Host: 127.0.0.1
 Port: 9443
-Type: MTProto
-Secret: возьмите из tunnelgram
+Secret: значение из tunnelgram
 ```
 
----
+## Режим 2: локальная HTTP/SOCKS5-прокси
 
-## Рекомендуемые настройки
+1. Откройте **Настройки → Основное**.
+2. Выберите **Локальный HTTP/SOCKS5 через внешний профиль**.
+3. Оставьте адрес `127.0.0.1` или `localhost`. Из соображений безопасности программа не разрешает слушать внешний сетевой интерфейс в этом режиме.
+4. Укажите свободный локальный порт, например `9443` или `1080`.
+5. Вставьте внешнюю ссылку подключения.
+6. При необходимости задайте локальный логин и пароль — обязательно оба поля вместе.
+7. Нажмите **Проверить соединение**, затем **Включить**.
+8. Нажмите **Telegram**. Будет открыта SOCKS5-ссылка на локальный порт.
 
-Рабочие настройки по умолчанию:
+На одном локальном порту работают оба протокола:
 
 ```text
-Адрес: 127.0.0.1
-Порт: 9443
-Secret mode: Fake TLS
-SNI: www.google.com
-Route: Telegram Direct WSS
-Domain style: kws
-Pin IP: выключено
-TCP fallback: выключено
-Autostart: по желанию
+SOCKS5: 127.0.0.1:<порт>
+HTTP:   127.0.0.1:<порт>
 ```
 
-Если Fake TLS не работает в вашей версии Telegram Desktop, попробуйте Classic secret.
+Для Telegram рекомендуется выбирать **SOCKS5**. HTTP-вход можно использовать в других программах и в клиентах, где доступен тип HTTP Proxy.
 
----
+### Примеры внешних профилей
 
-## Что такое WSS
-
-WSS — это WebSocket поверх TLS, то есть защищённое постоянное соединение, похожее на HTTPS.
-
-Telegram поддерживает WebSocket transport для MTProto. Поэтому `tunnelgram` может не использовать сторонний сервер, а подключаться напрямую к Telegram WSS endpoint’ам:
+Замените значения на свои. Не публикуйте рабочие ссылки в issues или логах.
 
 ```text
-wss://kws1.web.telegram.org/apiws
-wss://kws2.web.telegram.org/apiws
-...
+http://user:password@proxy.example:8080
+https://user:password@proxy.example:443?sni=proxy.example
+socks5://user:password@proxy.example:1080
+vless://UUID@server.example:443?security=tls&sni=cdn.example&type=ws&path=%2Fws&host=cdn.example
+vless://UUID@server.example:443?security=reality&sni=example.com&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&flow=xtls-rprx-vision
+hysteria2://password@server.example:443?sni=cdn.example&obfs=salamander&obfs-password=MASK
 ```
 
-`tunnelgram` не расшифровывает Telegram-сообщения. Он принимает зашифрованный поток от Telegram Desktop и перекладывает его в WSS-соединение к Telegram.
-
----
-
-## Безопасность простыми словами
-
-`tunnelgram` не должен видеть ваши сообщения в читаемом виде.
-
-Telegram Desktop передаёт через прокси уже зашифрованный MTProto-трафик. Приложение только перекладывает эти байты из локального подключения в WebSocket-соединение к Telegram.
-
-Приложение может видеть технические данные:
+Поддерживаемые схемы:
 
 ```text
-локальный IP и порт
-адрес Telegram DC / WSS endpoint
-время подключений
-размер трафика
-количество соединений
-ошибки подключения
-локальный proxy secret
+http, https, socks, socks4, socks4a, socks5, socks5h, vless, hysteria2, hy2
 ```
 
-Приложение не должно видеть:
+## Где хранятся настройки
+
+Windows:
 
 ```text
-текст сообщений
-файлы в читаемом виде
-названия чатов
-контакты
-пароли
-коды входа
-историю браузера
-данные других приложений
+%APPDATA%\tunnelgram\config.json
+%TEMP%\tunnelgram\sing-box-<случайный-id>.json
 ```
 
-Важно: это справедливо только для честной версии приложения из открытого исходного кода. Не запускайте неизвестные `.exe` из случайных источников.
-
----
-
-## Безопасное использование
-
-Рекомендуется:
-
-- запускать приложение только из открытого исходного кода или доверенной сборки;
-- слушать только `127.0.0.1`;
-- не использовать `0.0.0.0` или LAN-адреса для локального прокси;
-- не передавать proxy secret посторонним;
-- не скачивать неизвестные `.exe` из случайных источников;
-- проверять релизные архивы и контрольные суммы, если они опубликованы;
-- держать Python и зависимости обновлёнными.
-
-`tunnelgram` не должен:
-
-- читать переписки Telegram;
-- сохранять сообщения;
-- отправлять телеметрию;
-- отправлять логи разработчику;
-- использовать скрытые автообновления;
-- открывать универсальный прокси наружу;
-- передавать трафик через сторонний сервер без явного выбора пользователя.
-
----
-
-## Приватность и хранение данных
-
-`tunnelgram` не собирает пользовательские данные и не отправляет телеметрию.
-
-Приложение может обрабатывать:
-
-```text
-локальный адрес и порт прокси
-proxy secret
-SNI-домен для Fake TLS
-выбранный маршрут
-настройки темы
-настройку автозапуска
-технические логи подключения
-```
-
-Эти данные нужны для работы приложения.
-
-В обычном режиме Telegram Direct WSS трафик идёт так:
-
-```text
-Telegram Desktop
-→ tunnelgram на локальном компьютере
-→ Telegram WSS endpoint
-```
-
-`tunnelgram` не отправляет данные разработчику.
-
----
-
-## Локальное хранение настроек
-
-Настройки сохраняются локально.
-
-На Windows обычно:
-
-```text
-%APPDATA%\TunnelGram\config.json
-```
-
-На Linux/macOS обычно:
+Linux/macOS:
 
 ```text
 ~/.tunnelgram/config.json
+${TMPDIR:-/tmp}/tunnelgram/sing-box-<случайный-id>.json
 ```
 
-Файл настроек может содержать proxy secret.
+В профиле могут находиться пароль, UUID и другие секреты. На Unix-файлы создаются с правами `0600`, однако доступ к учётной записи пользователя всё равно означает доступ к этим данным.
 
----
+В интерфейсе внешняя ссылка показывается в скрытом виде. Не отправляйте исходный `config.json`, временный `sing-box-*.json` или полную ссылку третьим лицам.
 
-## Логи
+## Проверка проекта локально
 
-Логи отображаются в интерфейсе приложения.
+```bash
+python -m pip install -r requirements.txt
+python -m pip install pytest
+python -m compileall tunnelgram
+python -m py_compile tunnelgram_app.py
+python -m pytest -q
+```
 
-По умолчанию они не сохраняются на диск.  
-Пользователь может вручную экспортировать логи в файл кнопкой:
+## GitHub Actions
+
+В репозитории находятся три workflow.
+
+### `python-check.yml`
+
+Запускается при push в ветку и при pull request. Он:
+
+- устанавливает зависимости;
+- компилирует Python-файлы;
+- импортирует основные модули;
+- запускает unit-тесты.
+
+### `build-release.yml`
+
+Основной workflow релиза. Он собирает четыре архива:
 
 ```text
-Экспорт
+tunnelgram-windows-x64.zip
+tunnelgram-linux-x64.tar.gz
+tunnelgram-macos-arm64.zip
+tunnelgram-macos-x64.zip
 ```
 
-При выходе из приложения GUI-логи очищаются.
+Каждая сборка скачивает закреплённый официальный `sing-box`, добавляет его рядом с программой или внутрь `.app`, а также прикладывает лицензию и ссылку на исходный код sing-box.
 
-Перед публикацией логов удалите:
+### `build-macos-only.yml`
+
+Ручная отдельная сборка двух вариантов macOS. Полезна, когда менялась только упаковка macOS или нужно повторно загрузить macOS-архивы в уже существующий Release.
+
+## Как проверить сборки без создания релиза
+
+1. Залейте изменения в ветку `main`.
+2. На GitHub откройте вкладку **Actions**.
+3. Слева выберите **Build release binaries**.
+4. Нажмите **Run workflow**.
+5. Оставьте **Upload the archives to a GitHub Release** выключенным.
+6. После завершения откройте запуск и скачайте файлы в секции **Artifacts**.
+
+Artifacts хранятся ограниченное время и предназначены для проверки. Пользовательские версии лучше публиковать в **Releases**.
+
+## Как выпустить новую версию через тег
+
+Сначала измените версию в:
 
 ```text
-proxy secret
-локальные пути
-IP-адреса, если не хотите их раскрывать
+tunnelgram/__init__.py
 ```
 
----
+Например:
 
-## Автозапуск
+```python
+__version__ = "2.0"
+```
 
-В настройках можно включить:
+Затем выполните:
+
+```bash
+git add .
+git commit -m "Release v2.0"
+git push origin main
+git tag -a v2.0 -m "tunnelgram 2.0"
+git push origin v2.0
+```
+
+Push тега `v*` автоматически запускает `build-release.yml`. После успешной сборки workflow:
+
+1. создаст GitHub Release, если его ещё нет;
+2. загрузит туда все четыре архива;
+3. заменит архивы с теми же именами при повторном запуске.
+
+Не создавайте одновременно Release вручную и тег отдельными действиями с разными версиями. Источником версии должен быть один и тот же тег, например `v2.0`.
+
+## Ручная загрузка в существующий Release
+
+1. Убедитесь, что Release с нужным тегом уже существует.
+2. Откройте **Actions → Build release binaries → Run workflow**.
+3. Включите **Upload the archives to a GitHub Release**.
+4. Введите точный тег, например `v2.0`.
+5. Запустите workflow.
+
+Для только macOS используйте **Build macOS only** и те же поля.
+
+## Локальная ручная сборка
+
+Установите PyInstaller:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip install "pyinstaller>=6.0"
+```
+
+Windows:
+
+```powershell
+pyinstaller --noconfirm --clean --onefile --windowed --name tunnelgram --icon assets/tunnelgram.ico --add-data "assets;assets" tunnelgram_app.py
+```
+
+Linux:
+
+```bash
+pyinstaller --noconfirm --clean --onefile --windowed --name tunnelgram --add-data "assets:assets" tunnelgram_app.py
+```
+
+macOS:
+
+```bash
+pyinstaller --noconfirm --clean --onedir --windowed --name tunnelgram --add-data "assets:assets" tunnelgram_app.py
+```
+
+После локальной сборки вручную положите подходящий `sing-box` рядом с Windows/Linux executable. Для macOS поместите его в:
 
 ```text
-Запускать вместе с системой
+tunnelgram.app/Contents/Resources/sing-box
 ```
 
-По умолчанию автозапуск выключен.
-
-Поддерживаемые варианты автозапуска:
-
-```text
-Windows → HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-Linux   → ~/.config/autostart/tunnelgram.desktop
-macOS   → ~/Library/LaunchAgents/com.tunnelgram.app.plist
-```
-
-На Windows автозапуск добавляется только для текущего пользователя и не требует прав администратора.
-
-На Linux используется стандартный desktop-entry автозапуск через `~/.config/autostart`.
-
-На macOS используется пользовательский LaunchAgent через `~/Library/LaunchAgents`.
-
-Для Linux/macOS автозапуска используется скрипт:
-
-```text
-run_unix_autostart.sh
-```
-
----
-
-## Сообщение об уязвимости
-
-Если вы нашли проблему безопасности:
-
-1. не публикуйте exploit публично сразу;
-2. опишите проблему;
-3. приложите шаги воспроизведения;
-4. укажите версию приложения;
-5. приложите минимальные логи без секретов.
-
----
-
-## Как удалить данные приложения
-
-Для удаления локальных настроек удалите папку:
-
-```text
-%APPDATA%\TunnelGram
-```
-
-Также можно удалить запись автозапуска:
-
-```text
-Windows → HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-Linux   → ~/.config/autostart/tunnelgram.desktop
-macOS   → ~/Library/LaunchAgents/com.tunnelgram.app.plist
-```
-
----
+GitHub Actions делает это автоматически и поэтому является рекомендуемым способом выпуска архивов.
 
 ## Ограничения
 
-`tunnelgram` — локальный транспортный мост, а не полноценный VPN.
+- tunnelgram не выдаёт и не продаёт VLESS/Hysteria2-профили — пользователь вставляет собственную ссылку;
+- поддерживаются распространённые URI-параметры, но редкий или нестандартный формат ссылки провайдера может потребовать адаптации;
+- новый режим создаёт локальную прикладную прокси, а не системный VPN/TUN;
+- DNS и UDP-возможности зависят от выбранного внешнего протокола и программы-клиента;
+- приложение не обходит ограничения macOS Gatekeeper с помощью платной Developer ID подписи или notarization;
+- работоспособность конкретного сервера проверяется только реальным подключением: `sing-box check` проверяет структуру конфигурации, а не доступность сервера.
 
-Он не скрывает весь интернет-трафик.  
-Он не меняет IP-адрес пользователя.  
-Он не является анонимайзером.  
-Он работает только с Telegram Desktop, который настроен на локальный MTProto-прокси.
+## Лицензии и сторонние компоненты
 
----
-
-# English
-
-`tunnelgram` is a local proxy client for Telegram Desktop.
-
-It accepts a local Telegram Desktop connection on `127.0.0.1`, then forwards encrypted MTProto traffic through official Telegram WebSocket/WSS endpoints.
-
-```text
-Telegram Desktop
-→ 127.0.0.1:9443
-→ tunnelgram
-→ wss://kws*.web.telegram.org/apiws
-→ Telegram
-```
-
-The main idea: no third-party VPS or relay server is required. The app runs locally and connects directly to Telegram WebSocket servers.
+Сведения о `sing-box`, его GPLv3-лицензии и исходном коде находятся в [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). Архивы релиза также содержат полный текст лицензии sing-box.
 
 ---
 
-## Features
+## English summary
 
-- local MTProto proxy for Telegram Desktop;
-- Telegram Direct WSS mode;
-- Classic `dd-secret` support;
-- Fake TLS `ee-secret` support;
-- tray mode;
-- WSS connectivity check;
-- log export;
-- Windows launch script;
-- Linux/macOS launch script;
-- optional system autostart on Windows, Linux, and macOS.
+`tunnelgram 2.0` supports two modes: the original local MTProto-to-Telegram-WSS bridge and a local mixed HTTP/SOCKS5 proxy routed through an HTTP, SOCKS, VLESS or Hysteria2 URI. Release workflows build Windows x64, Linux x64, macOS arm64 and macOS Intel archives and bundle a pinned sing-box core with its license and source reference.
 
----
-
-## Quick start on Windows
-
-### Normal launch
-
-Open the project folder and run:
-
-```bat
-run_windows.bat
-```
-
-The script creates a Python virtual environment, installs dependencies, checks the main Python files, and starts the app.
-
-If startup succeeds, the console window closes automatically.  
-If an error occurs, the console stays open so the error can be copied for debugging.
-
-### Hidden launch without console
-
-First run the normal launcher once:
-
-```bat
-run_windows.bat
-```
-
-After installation, you can use:
-
-```text
-run_hidden.vbs
-```
-
-This starts the app without a console window.
-
----
-
-## Quick start on Linux / macOS
-
-Make the script executable:
-
-```bash
-chmod +x run_unix.sh
-```
-
-Run:
-
-```bash
-./run_unix.sh
-```
-
-The script should:
-
-1. find `python3` or `python`;
-2. check for `tkinter` in the system Python;
-3. create `.venv`;
-4. check for `tkinter` inside `.venv`;
-5. upgrade `pip`;
-6. install dependencies from `requirements.txt`;
-7. check Python files;
-8. start the GUI.
-
-### If tkinter is missing on Linux
-
-Debian/Ubuntu:
-
-```bash
-sudo apt update
-sudo apt install python3 python3-venv python3-pip python3-tk
-```
-
-Fedora:
-
-```bash
-sudo dnf install python3 python3-pip python3-tkinter
-```
-
-Arch:
-
-```bash
-sudo pacman -S python tk
-```
-
-### If tkinter is missing on macOS
-
-It is recommended to install Python from the official website:
-
-```text
-https://www.python.org/downloads/macos/
-```
-
-Or use Homebrew:
-
-```bash
-brew install python
-```
-
-Then run again:
-
-```bash
-./run_unix.sh
-```
-
-### Silent autostart script
-
-Linux/macOS autostart uses a separate script:
-
-```bash
-run_unix_autostart.sh
-```
-
-It starts the app quietly, without extra terminal output, and is suitable for login autostart.
-
-Usually, you do not need to create it manually: the app can create it automatically when autostart is enabled in settings.
-
-Linux/macOS autostart errors are written to:
-
-```text
-~/.tunnelgram/autostart.log
-
----
-
-## Telegram Desktop setup
-
-In the app, click:
-
-```text
-Start
-```
-
-Then click:
-
-```text
-Telegram
-```
-
-Telegram should ask you to add the local MTProto proxy.
-
-Manual setup:
-
-```text
-Host: 127.0.0.1
-Port: 9443
-Type: MTProto
-Secret: copy it from tunnelgram
-```
-
----
-
-## Recommended settings
-
-Default working settings:
-
-```text
-Host: 127.0.0.1
-Port: 9443
-Secret mode: Fake TLS
-SNI: www.google.com
-Route: Telegram Direct WSS
-Domain style: kws
-Pin IP: disabled
-TCP fallback: disabled
-Autostart: optional
-```
-
-If Fake TLS does not work with your Telegram Desktop version, try Classic secret.
-
----
-
-## What is WSS
-
-WSS is WebSocket over TLS, a secure persistent connection similar to HTTPS.
-
-Telegram supports WebSocket transport for MTProto. That is why `tunnelgram` does not need a third-party server and can connect directly to Telegram WSS endpoints:
-
-```text
-wss://kws1.web.telegram.org/apiws
-wss://kws2.web.telegram.org/apiws
-...
-```
-
-`tunnelgram` does not decrypt Telegram messages. It receives an encrypted stream from Telegram Desktop and moves it into a WSS connection to Telegram.
-
----
-
-## Security in simple words
-
-`tunnelgram` should not see your messages in readable form.
-
-Telegram Desktop sends already encrypted MTProto traffic through the proxy. The app only moves these bytes from a local connection into a WebSocket connection to Telegram.
-
-The app may see technical metadata:
-
-```text
-local IP and port
-Telegram DC / WSS endpoint
-connection time
-traffic volume
-number of connections
-connection errors
-local proxy secret
-```
-
-The app should not see:
-
-```text
-message text
-files in readable form
-chat names
-contacts
-passwords
-login codes
-browser history
-data from other apps
-```
-
-This is true only for a trusted build from open source code. Do not run unknown `.exe` files from random sources.
-
----
-
-## Safe usage
-
-Recommended:
-
-- run the app only from open source code or a trusted build;
-- listen only on `127.0.0.1`;
-- do not use `0.0.0.0` or LAN addresses for the local proxy;
-- do not share your proxy secret;
-- do not download unknown `.exe` files from random sources;
-- verify release archives and checksums if published;
-- keep Python and dependencies updated.
-
-`tunnelgram` should not:
-
-- read Telegram chats;
-- store messages;
-- send telemetry;
-- send logs to the developer;
-- use hidden auto-updates;
-- expose a universal proxy to the network;
-- route traffic through a third-party server without explicit user choice.
-
----
-
-## Privacy and local data
-
-`tunnelgram` does not collect user data and does not send telemetry.
-
-The app may process:
-
-```text
-local proxy address and port
-proxy secret
-Fake TLS SNI domain
-selected route mode
-theme settings
-autostart setting
-technical connection logs
-```
-
-These values are required for the app to work.
-
-In the normal Telegram Direct WSS mode, traffic flows as follows:
-
-```text
-Telegram Desktop
-→ tunnelgram on the local computer
-→ Telegram WSS endpoint
-```
-
-`tunnelgram` does not send data to the developer.
-
----
-
-## Local settings storage
-
-Settings are stored locally.
-
-On Windows, usually:
-
-```text
-%APPDATA%\TunnelGram\config.json
-```
-
-On Linux/macOS, usually:
-
-```text
-~/.tunnelgram/config.json
-```
-
-The settings file may contain the proxy secret.
-
----
-
-## Logs
-
-Logs are displayed in the application UI.
-
-By default, logs are not saved to disk.  
-The user can manually export logs to a file using:
-
-```text
-Export
-```
-
-GUI logs are cleared when the app exits.
-
-Before sharing logs, remove:
-
-```text
-proxy secret
-local paths
-IP addresses, if you do not want to disclose them
-```
-
----
-
-## Autostart
-
-Settings can enable:
-
-```text
-Start with system
-```
-
-Autostart is disabled by default.
-
-Supported autostart methods:
-
-```text
-Windows → HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-Linux   → ~/.config/autostart/tunnelgram.desktop
-macOS   → ~/Library/LaunchAgents/com.tunnelgram.app.plist
-```
-
-On Windows, autostart is added only for the current user and does not require administrator rights.
-
-On Linux, autostart uses the standard desktop-entry mechanism through `~/.config/autostart`.
-
-On macOS, autostart uses a user LaunchAgent through `~/Library/LaunchAgents`.
-
-Linux/macOS autostart uses this script:
-
-```text
-run_unix_autostart.sh
-```
-
----
-
-## Reporting a vulnerability
-
-If you find a security issue:
-
-1. do not immediately publish an exploit;
-2. describe the issue;
-3. include reproduction steps;
-4. include the app version;
-5. include minimal logs without secrets.
-
----
-
-## How to delete app data
-
-To delete local settings, remove:
-
-```text
-%APPDATA%\TunnelGram
-```
-
-You can also remove the autostart entry:
-
-```text
-Windows → HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-Linux   → ~/.config/autostart/tunnelgram.desktop
-macOS   → ~/Library/LaunchAgents/com.tunnelgram.app.plist
-```
-
----
-
-## Limitations
-
-`tunnelgram` is a local transport bridge, not a full VPN.
-
-It does not hide all internet traffic.  
-It does not change the user’s IP address.  
-It is not an anonymizer.  
-It works only with Telegram Desktop configured to use the local MTProto proxy.
+For a test build, run **Actions → Build release binaries → Run workflow** without release upload. For a public release, update `tunnelgram/__init__.py`, commit, push, create a `v*` tag and push the tag. The workflow creates or updates the matching GitHub Release automatically.

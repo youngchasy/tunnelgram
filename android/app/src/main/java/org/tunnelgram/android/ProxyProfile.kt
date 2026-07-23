@@ -343,7 +343,7 @@ object SingBoxConfigBuilder {
     fun build(
         profileUri: String,
         listenPort: Int,
-        logLevel: String = "info",
+        logLevel: String = "warn",
     ): Pair<ProxyProfile, JSONObject> {
         if (listenPort !in 1..65535) throw ProfileException("Локальный порт должен быть от 1 до 65535")
         val profile = ProfileParser.parse(profileUri)

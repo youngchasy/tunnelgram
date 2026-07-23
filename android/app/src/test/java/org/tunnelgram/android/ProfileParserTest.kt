@@ -73,7 +73,7 @@ class ProfileParserTest {
         assertEquals("127.0.0.1", inbound.getString("listen"))
         assertEquals(9443, inbound.getInt("listen_port"))
         assertEquals("proxy-out", config.getJSONObject("route").getString("final"))
-        assertTrue(config.getJSONObject("route").getBoolean("auto_detect_interface"))
+        assertFalse(config.getJSONObject("route").has("auto_detect_interface"))
     }
 
     @Test(expected = ProfileException::class)

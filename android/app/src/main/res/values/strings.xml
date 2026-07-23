@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Tunnelgram</string>
+    <string name="notification_channel_name">Локальная прокси</string>
+    <string name="notification_channel_description">Работа Tunnelgram в фоне</string>
+</resources>

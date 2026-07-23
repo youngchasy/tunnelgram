@@ -27,3 +27,7 @@ THIRD_PARTY_LICENSES/sing-box-source.txt
 The first file is the full upstream license text. The second file points to the corresponding source code for the bundled version.
 
 `tunnelgram` and sing-box communicate through a generated JSON configuration file and process invocation. No sing-box source code is copied into the Python package.
+
+## Android packaging
+
+The Android workflow downloads the official standalone Android builds of sing-box for ARMv7 and ARM64, packages them as ABI-specific native executables, includes the upstream license in the APK assets, and records the exact upstream source tag. The binaries are not stored in this source archive.

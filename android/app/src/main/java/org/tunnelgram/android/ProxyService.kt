@@ -10,8 +10,6 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import java.io.File
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -20,6 +18,7 @@ class ProxyService : Service() {
     companion object {
         const val ACTION_START = "org.tunnelgram.android.action.START"
         const val ACTION_STOP = "org.tunnelgram.android.action.STOP"
+        const val ACTION_DIAGNOSE = "org.tunnelgram.android.action.DIAGNOSE"
         const val EXTRA_PROFILE_URI = "profile_uri"
         const val EXTRA_PORT = "listen_port"
 
@@ -27,15 +26,20 @@ class ProxyService : Service() {
         private const val NOTIFICATION_ID = 2001
     }
 
-    private val executor = Executors.newSingleThreadExecutor()
+    private val coreExecutor = Executors.newSingleThreadExecutor()
+    private val diagnosticExecutor = Executors.newSingleThreadExecutor()
     private val stopping = AtomicBoolean(false)
     private val active = AtomicBoolean(false)
+    private val diagnosticRunning = AtomicBoolean(false)
 
     @Volatile
     private var process: Process? = null
 
     @Volatile
     private var currentProfileName: String = ""
+
+    @Volatile
+    private var currentPort: Int = 9443
 
     override fun onCreate() {
         super.onCreate()
@@ -45,10 +49,18 @@ class ProxyService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            LogStore.append(this, "Остановка по команде пользователя")
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                LogStore.append(this, "Остановка по команде пользователя")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            ACTION_DIAGNOSE -> {
+                val requestedPort = intent.getIntExtra(EXTRA_PORT, currentPort)
+                scheduleDiagnostics(requestedPort, automatic = false)
+                return START_NOT_STICKY
+            }
         }
 
         val profileUri = intent?.getStringExtra(EXTRA_PROFILE_URI).orEmpty().trim()
@@ -63,8 +75,9 @@ class ProxyService : Service() {
             return START_NOT_STICKY
         }
 
+        currentPort = port
         stopping.set(false)
-        executor.execute {
+        coreExecutor.execute {
             try {
                 runProxy(profileUri, port)
             } finally {
@@ -78,7 +91,8 @@ class ProxyService : Service() {
         stopping.set(true)
         active.set(false)
         stopCore()
-        executor.shutdownNow()
+        coreExecutor.shutdownNow()
+        diagnosticExecutor.shutdownNow()
         RuntimeState.update(this, false, "Остановлено", currentProfileName)
         LogStore.append(this, "Прокси остановлена")
         super.onDestroy()
@@ -88,7 +102,7 @@ class ProxyService : Service() {
 
     private fun runProxy(profileUri: String, port: Int) {
         try {
-            val (profile, config) = SingBoxConfigBuilder.build(profileUri, port)
+            val (profile, config) = SingBoxConfigBuilder.build(profileUri, port, logLevel = "warn")
             currentProfileName = profile.name
             RuntimeState.update(this, false, "Проверка профиля…", profile.name)
             updateNotification("Проверка ${profile.name}")
@@ -105,17 +119,19 @@ class ProxyService : Service() {
             process = startedProcess
             startLogReader(startedProcess)
 
-            if (!waitForPort(port, startedProcess, 10_000L)) {
+            val readiness = waitForSocks5(port, startedProcess, 12_000L)
+            if (!readiness.ok) {
                 val exit = exitCodeOrNull(startedProcess)
                 throw IllegalStateException(
-                    if (exit == null) "Локальный порт 127.0.0.1:$port не открылся за 10 секунд"
-                    else "sing-box завершился с кодом $exit до открытия локального порта",
+                    if (exit == null) "Локальная SOCKS5-прокси не готова: ${readiness.message}"
+                    else "sing-box завершился с кодом $exit до запуска SOCKS5",
                 )
             }
 
-            RuntimeState.update(this, true, "Работает: 127.0.0.1:$port", profile.name)
+            RuntimeState.update(this, true, "Работает: 127.0.0.1:$port\nЛокальный SOCKS5 отвечает", profile.name)
             updateNotification("SOCKS5/HTTP 127.0.0.1:$port")
-            LogStore.append(this, "Локальная HTTP/SOCKS5-прокси готова на 127.0.0.1:$port")
+            LogStore.append(this, "Локальная HTTP/SOCKS5-прокси готова на 127.0.0.1:$port (${readiness.elapsedMs} мс)")
+            scheduleDiagnostics(port, automatic = true)
 
             val exitCode = startedProcess.waitFor()
             process = null
@@ -135,6 +151,76 @@ class ProxyService : Service() {
         }
     }
 
+    private fun scheduleDiagnostics(port: Int, automatic: Boolean) {
+        val activeProcess = process
+        if (!active.get() || activeProcess == null || exitCodeOrNull(activeProcess) != null) {
+            if (!automatic) {
+                RuntimeState.update(this, false, "Прокси не запущена", currentProfileName)
+                LogStore.append(this, "Диагностика отменена: прокси не запущена")
+                stopSelf()
+            }
+            return
+        }
+        if (!diagnosticRunning.compareAndSet(false, true)) {
+            if (!automatic) LogStore.append(this, "Диагностика уже выполняется")
+            return
+        }
+        diagnosticExecutor.execute {
+            try {
+                runDiagnostics(port, automatic)
+            } finally {
+                diagnosticRunning.set(false)
+            }
+        }
+    }
+
+    private fun runDiagnostics(port: Int, automatic: Boolean) {
+        if (stopping.get()) return
+        RuntimeState.update(this, true, "Диагностика SOCKS5 и выхода…", currentProfileName)
+        if (!automatic) LogStore.append(this, "Запущена ручная диагностика")
+
+        val local = Socks5Probe.handshake("127.0.0.1", port, 2_000)
+        LogStore.append(this, "Диагностика локальной прокси: ${local.message} (${local.elapsedMs} мс)")
+        if (!local.ok) {
+            RuntimeState.update(
+                this,
+                true,
+                "Прокси-процесс запущен, но SOCKS5 на 127.0.0.1:$port не отвечает: ${local.message}",
+                currentProfileName,
+            )
+            updateNotification("Ошибка локального SOCKS5")
+            return
+        }
+
+        val targets = listOf("venus.web.telegram.org", "pluto.web.telegram.org")
+        var lastFailure: Socks5Probe.Result? = null
+        for (target in targets) {
+            if (stopping.get()) return
+            val result = Socks5Probe.connect("127.0.0.1", port, target, 443, 6_000)
+            LogStore.append(this, "Диагностика выхода: ${result.message} (${result.elapsedMs} мс)")
+            if (result.ok) {
+                RuntimeState.update(
+                    this,
+                    true,
+                    "Работает: 127.0.0.1:$port\nSOCKS5 и выход к Telegram проверены",
+                    currentProfileName,
+                )
+                updateNotification("SOCKS5 и выход проверены")
+                return
+            }
+            lastFailure = result
+        }
+
+        val failure = lastFailure?.message ?: "неизвестная ошибка"
+        RuntimeState.update(
+            this,
+            true,
+            "Локальный SOCKS5 работает, но выход через профиль не прошёл проверку: $failure",
+            currentProfileName,
+        )
+        updateNotification("Прокси запущена, выход не проверен")
+    }
+
     private fun locateCore(): File {
         val core = File(applicationInfo.nativeLibraryDir, "libsingbox.so")
         if (!core.isFile) {
@@ -143,7 +229,7 @@ class ProxyService : Service() {
             )
         }
         if (!core.canExecute()) core.setExecutable(true, false)
-        LogStore.append(this, "Ядро: ${core.absolutePath}")
+        LogStore.append(this, "Ядро найдено для ABI ${Build.SUPPORTED_ABIS.firstOrNull().orEmpty()}")
         return core
     }
 
@@ -169,12 +255,12 @@ class ProxyService : Service() {
         val check = createProcess(core, configFile, "check")
         val output = check.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         val code = check.waitFor()
-        output.lineSequence().filter { it.isNotBlank() }.forEach {
-            LogStore.append(this, "check: $it")
-        }
+        val lines = output.lineSequence().filter { it.isNotBlank() }.map { "check: $it" }.toList()
+        LogStore.appendBatch(this, lines)
         if (code != 0) {
             throw IllegalStateException(
-                output.lineSequence().lastOrNull { it.isNotBlank() } ?: "Проверка конфигурации завершилась с кодом $code",
+                output.lineSequence().lastOrNull { it.isNotBlank() }
+                    ?: "Проверка конфигурации завершилась с кодом $code",
             )
         }
         LogStore.append(this, "Проверка конфигурации пройдена")
@@ -187,6 +273,7 @@ class ProxyService : Service() {
         builder.environment()["HOME"] = filesDir.absolutePath
         builder.environment()["TMPDIR"] = cacheDir.absolutePath
         builder.environment()["XDG_CACHE_HOME"] = cacheDir.absolutePath
+        builder.environment()["NO_COLOR"] = "1"
         return builder.start()
     }
 
@@ -205,20 +292,16 @@ class ProxyService : Service() {
         }
     }
 
-    private fun waitForPort(port: Int, activeProcess: Process, timeoutMillis: Long): Boolean {
+    private fun waitForSocks5(port: Int, activeProcess: Process, timeoutMillis: Long): Socks5Probe.Result {
         val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis)
+        var last = Socks5Probe.Result(false, "порт ещё не открыт", 0L)
         while (System.nanoTime() < deadline && !stopping.get()) {
-            if (exitCodeOrNull(activeProcess) != null) return false
-            try {
-                Socket().use { socket ->
-                    socket.connect(InetSocketAddress("127.0.0.1", port), 150)
-                    return true
-                }
-            } catch (_: Exception) {
-                Thread.sleep(150)
-            }
+            if (exitCodeOrNull(activeProcess) != null) return last
+            last = Socks5Probe.handshake("127.0.0.1", port, 500)
+            if (last.ok) return last
+            Thread.sleep(200)
         }
-        return false
+        return last
     }
 
     private fun exitCodeOrNull(activeProcess: Process): Int? {

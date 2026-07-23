@@ -1,0 +1,218 @@
+name: Build Android APKs
+run-name: Build Android ${{ github.ref_name }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_to_release:
+        description: "Upload APKs to a GitHub Release"
+        required: true
+        default: false
+        type: boolean
+      release_tag:
+        description: "Existing or new release tag, for example v2.0"
+        required: false
+        default: ""
+        type: string
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  JAVA_VERSION: "17"
+  GRADLE_VERSION: "8.9"
+  ANDROID_API: "35"
+  ANDROID_BUILD_TOOLS: "35.0.0"
+  SING_BOX_VERSION: "1.13.14"
+
+jobs:
+  build:
+    name: Build ARM32, ARM64 and universal APKs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-${ANDROID_API}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}"
+
+      - name: Download official sing-box Android cores
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}"
+          rm -rf android/app/src/main/jniLibs
+          mkdir -p \
+            android/app/src/main/jniLibs/armeabi-v7a \
+            android/app/src/main/jniLibs/arm64-v8a \
+            android/app/src/main/assets
+
+          download_core() {
+            local upstream_arch="$1"
+            local android_abi="$2"
+            local archive="sing-box-${SING_BOX_VERSION}-android-${upstream_arch}.tar.gz"
+            local work="core-${android_abi}"
+            curl --fail --location --retry 3 "$base/$archive" --output "$archive"
+            case "$upstream_arch" in
+              arm)   echo "f650977ff36f50ed59135ee8344c622ba737fbb9ff343b9e200fea246a81c181  $archive" | sha256sum --check --strict ;;
+              arm64) echo "59a4d18a4108e2f2a1bd49ca547829112712123975092d4a4bf1f443b6f3d747  $archive" | sha256sum --check --strict ;;
+              *) exit 2 ;;
+            esac
+            mkdir -p "$work"
+            tar -xzf "$archive" -C "$work"
+            local core
+            core="$(find "$work" -type f -name sing-box -print -quit)"
+            test -n "$core"
+            cp "$core" "android/app/src/main/jniLibs/${android_abi}/libsingbox.so"
+            chmod 0755 "android/app/src/main/jniLibs/${android_abi}/libsingbox.so"
+          }
+
+          download_core arm armeabi-v7a
+          download_core arm64 arm64-v8a
+
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/SagerNet/sing-box/v${SING_BOX_VERSION}/LICENSE" \
+            --output android/app/src/main/assets/sing-box-LICENSE.txt
+          printf '%s\n' "https://github.com/SagerNet/sing-box/tree/v${SING_BOX_VERSION}" \
+            > android/app/src/main/assets/sing-box-source.txt
+
+          file android/app/src/main/jniLibs/*/libsingbox.so
+
+      - name: Configure release signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${KEYSTORE_BASE64}" && -n "${KEYSTORE_PASSWORD}" && -n "${KEY_ALIAS}" && -n "${KEY_PASSWORD}" ]]; then
+            printf '%s' "${KEYSTORE_BASE64}" | base64 --decode > "$GITHUB_WORKSPACE/android/tunnelgram-release.jks"
+            {
+              echo "TUNNELGRAM_KEYSTORE_FILE=$GITHUB_WORKSPACE/android/tunnelgram-release.jks"
+              echo "TUNNELGRAM_KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD}"
+              echo "TUNNELGRAM_KEY_ALIAS=${KEY_ALIAS}"
+              echo "TUNNELGRAM_KEY_PASSWORD=${KEY_PASSWORD}"
+            } >> "$GITHUB_ENV"
+            echo "Release APKs will use the private Tunnelgram signing key."
+          else
+            echo "::warning::Android signing secrets are missing. APKs will be signed with a temporary debug key; a later build may require uninstalling the previous APK."
+          fi
+
+      - name: Run Android unit tests
+        working-directory: android
+        run: gradle --no-daemon --stacktrace :app:testReleaseUnitTest
+
+      - name: Build release APKs
+        working-directory: android
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Collect and name APKs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p android-release
+          find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print
+
+          legacy="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*armeabi-v7a*release*.apk' -print -quit)"
+          modern="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*arm64-v8a*release*.apk' -print -quit)"
+          universal="$(find android/app/build/outputs/apk/release -maxdepth 1 -type f -name '*universal*release*.apk' -print -quit)"
+
+          test -n "$legacy"
+          test -n "$modern"
+          test -n "$universal"
+
+          cp "$legacy" android-release/tunnelgram-android-legacy-armeabi-v7a.apk
+          cp "$modern" android-release/tunnelgram-android-modern-arm64-v8a.apk
+          cp "$universal" android-release/tunnelgram-android-universal.apk
+          cp android/README.md android-release/ANDROID-README.md
+          (cd android-release && sha256sum *.apk > SHA256SUMS.txt)
+
+      - name: Verify APK contents
+        shell: bash
+        run: |
+          set -euo pipefail
+          for apk in android-release/*.apk; do
+            echo "--- $apk"
+            apkanalyzer manifest min-sdk "$apk"
+            apkanalyzer manifest target-sdk "$apk"
+            apkanalyzer files list "$apk" | grep -E 'lib/(armeabi-v7a|arm64-v8a)/libsingbox.so' || true
+          done
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tunnelgram-android-apks
+          path: android-release/*
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Upload APKs to GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.upload_to_release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Download APK artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tunnelgram-android-apks
+          path: android-release
+
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${{ inputs.release_tag }}"
+          fi
+          if [[ -z "$tag" ]]; then
+            echo "release_tag is required when manual upload is enabled" >&2
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "tunnelgram $TAG" --generate-notes
+          fi
+          gh release upload "$TAG" android-release/* --clobber

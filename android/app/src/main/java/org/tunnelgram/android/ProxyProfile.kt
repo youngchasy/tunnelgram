@@ -155,13 +155,10 @@ object ProfileParser {
         val host = requireHost(uri)
         val port = requirePort(uri, 443)
         val credentials = userInfo(uri)
-        var password = first(query, "auth", "password")
-        if (password.isEmpty()) {
-            password = if (credentials.second != null) {
-                if (credentials.first.isNullOrEmpty()) credentials.second else "${credentials.first}:${credentials.second}"
-            } else {
-                credentials.first.orEmpty()
-            }
+        val password = first(query, "auth", "password").ifEmpty {
+            credentials.second?.let { rawPassword ->
+                if (credentials.first.isNullOrEmpty()) rawPassword else "${credentials.first}:$rawPassword"
+            } ?: credentials.first.orEmpty()
         }
         if (password.isEmpty()) throw ProfileException("В Hysteria2-ссылке отсутствует пароль")
 

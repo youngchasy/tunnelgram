@@ -19,8 +19,8 @@ android {
         applicationId = "org.tunnelgram.android"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20001
-        versionName = "2.0.0-android-alpha1"
+        versionCode = 20002
+        versionName = "2.0.0-android-alpha2"
 
         testInstrumentationRunner = "android.app.Instrumentation"
     }

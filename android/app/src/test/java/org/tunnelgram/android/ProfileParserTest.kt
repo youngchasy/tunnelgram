@@ -42,6 +42,18 @@ class ProfileParserTest {
     }
 
     @Test
+    fun parsesHysteria2UsernameAndPasswordUserInfo() {
+        val profile = ProfileParser.parse("hysteria2://user:secret@example.com:443")
+        assertEquals("user:secret", profile.outbound.getString("password"))
+    }
+
+    @Test
+    fun parsesHysteria2PasswordAfterEmptyUsername() {
+        val profile = ProfileParser.parse("hysteria2://:secret@example.com:443")
+        assertEquals("secret", profile.outbound.getString("password"))
+    }
+
+    @Test
     fun parsesAuthenticatedHttpAndSocks() {
         val http = ProfileParser.parse("https://user:pass@example.com:8443?sni=proxy.example")
         assertEquals("user", http.outbound.getString("username"))

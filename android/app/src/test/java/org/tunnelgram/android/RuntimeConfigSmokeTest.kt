@@ -25,9 +25,8 @@ class RuntimeConfigSmokeTest {
 
         val outbound = config.getJSONArray("outbounds").getJSONObject(0)
         assertEquals("bootstrap-doh", outbound.getString("domain_resolver"))
-        assertEquals(
-            "bootstrap-doh",
-            config.getJSONObject("route").getString("default_domain_resolver"),
-        )
+        val route = config.getJSONObject("route")
+        assertEquals("bootstrap-doh", route.getString("default_domain_resolver"))
+        assertTrue(!route.has("auto_detect_interface"))
     }
 }

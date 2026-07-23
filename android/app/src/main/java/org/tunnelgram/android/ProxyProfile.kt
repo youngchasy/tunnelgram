@@ -390,7 +390,9 @@ object SingBoxConfigBuilder {
                 "route",
                 JSONObject()
                     .put("final", "proxy-out")
-                    .put("auto_detect_interface", true)
+                    // This app exposes only a local mixed proxy and does not create a TUN interface.
+                    // auto_detect_interface makes the standalone Android CLI core try to bind sockets
+                    // to a physical interface, which is rejected for an unprivileged app on some ROMs.
                     .put("default_domain_resolver", dnsTag),
             )
         return profile to config

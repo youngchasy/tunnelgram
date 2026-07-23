@@ -107,6 +107,14 @@ object LogStore {
             val domain = line.substringAfter("lookup ", "").substringBefore(':').ifBlank { "unknown" }
             return "dns-loopback-refused:$domain"
         }
+        if (
+            line.contains("lookup ") &&
+            line.contains("operation not permitted", ignoreCase = true) &&
+            line.contains("dial tcp", ignoreCase = true)
+        ) {
+            val domain = line.substringAfter("lookup ", "").substringBefore(':').ifBlank { "unknown" }
+            return "dns-interface-bind-denied:$domain"
+        }
 
         return loopbackDnsPortPattern.replace(
             coreConnectionIdPattern.replace(line, "[connection]"),

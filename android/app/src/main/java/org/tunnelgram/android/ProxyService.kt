@@ -10,6 +10,8 @@ import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import java.io.File
+import java.net.InetSocketAddress
+import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
@@ -107,6 +109,7 @@ class ProxyService : Service() {
             RuntimeState.update(this, false, "Проверка профиля…", profile.name)
             updateNotification("Проверка ${profile.name}")
             LogStore.append(this, "Профиль распознан: ${profile.name}")
+            LogStore.append(this, directNetworkPreflight())
 
             val core = locateCore()
             val configFile = writeConfig(config.toString(2))
@@ -224,12 +227,29 @@ class ProxyService : Service() {
     private fun explainProfileFailure(fallback: String): String {
         val recent = LogStore.readTail(this, maxLines = 64, maxChars = 32_000).text
         return when {
+            recent.contains("operation not permitted", ignoreCase = true) &&
+                recent.contains("dial tcp", ignoreCase = true) ->
+                "Android запретил ядру привязать исходящее соединение к сетевому интерфейсу. " +
+                    "В alpha3.3 auto_detect_interface отключён; если ошибка осталась, проверьте сетевой доступ приложения в настройках прошивки"
             recent.contains("[::1]:53") && recent.contains("connection refused", ignoreCase = true) ->
-                "DNS Android недоступен: ядро пытается обратиться к [::1]:53. " +
-                    "В этой сборке должен использоваться встроенный DoH; экспортируйте лог, если ошибка повторяется"
+                "DNS Android недоступен: ядро пытается обратиться к [::1]:53"
             recent.contains("lookup ") && recent.contains("connection refused", ignoreCase = true) ->
                 "не удалось разрешить имя сервера внешнего профиля"
             else -> fallback
+        }
+    }
+
+    private fun directNetworkPreflight(): String {
+        val started = System.nanoTime()
+        return try {
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("1.1.1.1", 443), 3_000)
+            }
+            val elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+            "Прямой сетевой доступ Android разрешён (1.1.1.1:443, ${elapsed} мс)"
+        } catch (error: Exception) {
+            val message = error.message?.takeIf { it.isNotBlank() } ?: error.javaClass.simpleName
+            "ПРЕДУПРЕЖДЕНИЕ: прямой сетевой доступ Android не прошёл: $message"
         }
     }
 

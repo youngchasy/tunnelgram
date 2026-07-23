@@ -1,5 +1,14 @@
 # Changelog
 
+## Android stage 1 (development)
+
+- Added a native Kotlin Android application for Android 7.0 and newer.
+- Added one-profile HTTP, SOCKS5, VLESS, Hysteria2 and Hy2 parsing.
+- Added a local loopback mixed HTTP/SOCKS5 proxy powered by the official sing-box Android core.
+- Added foreground service lifecycle, persistent notification, start/stop controls and UTF-8 logs.
+- Added ARMv7 32-bit, ARM64 64-bit and universal APK outputs.
+- Added a GitHub Actions workflow with optional secret-backed release signing and Release upload.
+
 ## 2.0
 
 - Public 2.0 release of the proxy-mode redesign.

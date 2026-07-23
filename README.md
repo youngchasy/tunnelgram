@@ -158,6 +158,21 @@ ${TMPDIR:-/tmp}/tunnelgram/sing-box-<случайный-id>.json
 
 В интерфейсе внешняя ссылка показывается в скрытом виде. Не отправляйте исходный `config.json`, временный `sing-box-*.json` или полную ссылку третьим лицам.
 
+
+## Android — этап 1
+
+В каталоге [`android`](android/) находится отдельное Kotlin-приложение для Android 7.0+ с локальной HTTP/SOCKS5-прокси. Оно поддерживает один внешний профиль HTTP, SOCKS5, VLESS или Hysteria2, работает как foreground service и показывает журнал.
+
+Workflow `.github/workflows/build-android.yml` создаёт три APK:
+
+```text
+tunnelgram-android-legacy-armeabi-v7a.apk
+tunnelgram-android-modern-arm64-v8a.apk
+tunnelgram-android-universal.apk
+```
+
+32-битный APK нужен для Android-систем с ABI `armeabi-v7a`, 64-битный — для `arm64-v8a`; universal содержит оба варианта. Подробности, ограничения и инструкция сборки находятся в [`android/README.md`](android/README.md).
+
 ## Проверка проекта локально
 
 ```bash
@@ -167,6 +182,93 @@ python -m compileall tunnelgram
 python -m py_compile tunnelgram_app.py
 python -m pytest -q
 ```
+
+## GitHub Actions
+
+В репозитории находятся четыре workflow.
+
+### `python-check.yml`
+
+Запускается при push в ветку и при pull request. Он:
+
+- устанавливает зависимости;
+- компилирует Python-файлы;
+- импортирует основные модули;
+- запускает unit-тесты.
+
+### `build-release.yml`
+
+Основной workflow релиза. Он собирает четыре архива:
+
+```text
+tunnelgram-windows-x64.zip
+tunnelgram-linux-x64.tar.gz
+tunnelgram-macos-arm64.zip
+tunnelgram-macos-x64.zip
+```
+
+Каждая сборка скачивает закреплённый официальный `sing-box`, добавляет его рядом с программой или внутрь `.app`, а также прикладывает лицензию и ссылку на исходный код sing-box.
+
+### `build-macos-only.yml`
+
+Ручная отдельная сборка двух вариантов macOS. Полезна, когда менялась только упаковка macOS или нужно повторно загрузить macOS-архивы в уже существующий Release.
+
+### `build-android.yml`
+
+Ручная и теговая сборка Android-приложения. Workflow скачивает официальные Android-ядра sing-box для ARM 32-bit и ARM 64-bit, запускает Kotlin unit-тесты и создаёт отдельные ARMv7, ARM64 и universal APK. При ручном запуске APK можно загрузить в уже существующий Release, например `v2.0`.
+
+## Как проверить сборки без создания релиза
+
+1. Залейте изменения в ветку `main`.
+2. На GitHub откройте вкладку **Actions**.
+3. Слева выберите **Build release binaries**.
+4. Нажмите **Run workflow**.
+5. Оставьте **Upload the archives to a GitHub Release** выключенным.
+6. После завершения откройте запуск и скачайте файлы в секции **Artifacts**.
+
+Artifacts хранятся ограниченное время и предназначены для проверки. Пользовательские версии лучше публиковать в **Releases**.
+
+## Как выпустить новую версию через тег
+
+Сначала измените версию в:
+
+```text
+tunnelgram/__init__.py
+```
+
+Например:
+
+```python
+__version__ = "2.0"
+```
+
+Затем выполните:
+
+```bash
+git add .
+git commit -m "Release v2.0"
+git push origin main
+git tag -a v2.0 -m "tunnelgram 2.0"
+git push origin v2.0
+```
+
+Push тега `v*` автоматически запускает `build-release.yml`. После успешной сборки workflow:
+
+1. создаст GitHub Release, если его ещё нет;
+2. загрузит туда все четыре архива;
+3. заменит архивы с теми же именами при повторном запуске.
+
+Не создавайте одновременно Release вручную и тег отдельными действиями с разными версиями. Источником версии должен быть один и тот же тег, например `v2.0`.
+
+## Ручная загрузка в существующий Release
+
+1. Убедитесь, что Release с нужным тегом уже существует.
+2. Откройте **Actions → Build release binaries → Run workflow**.
+3. Включите **Upload the archives to a GitHub Release**.
+4. Введите точный тег, например `v2.0`.
+5. Запустите workflow.
+
+Для только macOS используйте **Build macOS only** и те же поля.
 
 ## Локальная ручная сборка
 
@@ -200,6 +302,8 @@ pyinstaller --noconfirm --clean --onedir --windowed --name tunnelgram --add-data
 ```text
 tunnelgram.app/Contents/Resources/sing-box
 ```
+
+GitHub Actions делает это автоматически и поэтому является рекомендуемым способом выпуска архивов.
 
 ## Ограничения
 

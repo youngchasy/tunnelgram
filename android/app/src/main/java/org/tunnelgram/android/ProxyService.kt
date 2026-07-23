@@ -211,7 +211,7 @@ class ProxyService : Service() {
             lastFailure = result
         }
 
-        val failure = lastFailure?.message ?: "неизвестная ошибка"
+        val failure = explainProfileFailure(lastFailure?.message ?: "неизвестная ошибка")
         RuntimeState.update(
             this,
             true,
@@ -219,6 +219,18 @@ class ProxyService : Service() {
             currentProfileName,
         )
         updateNotification("Прокси запущена, выход не проверен")
+    }
+
+    private fun explainProfileFailure(fallback: String): String {
+        val recent = LogStore.readTail(this, maxLines = 64, maxChars = 32_000).text
+        return when {
+            recent.contains("[::1]:53") && recent.contains("connection refused", ignoreCase = true) ->
+                "DNS Android недоступен: ядро пытается обратиться к [::1]:53. " +
+                    "В этой сборке должен использоваться встроенный DoH; экспортируйте лог, если ошибка повторяется"
+            recent.contains("lookup ") && recent.contains("connection refused", ignoreCase = true) ->
+                "не удалось разрешить имя сервера внешнего профиля"
+            else -> fallback
+        }
     }
 
     private fun locateCore(): File {

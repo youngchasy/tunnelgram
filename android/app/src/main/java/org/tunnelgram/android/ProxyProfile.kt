@@ -353,15 +353,45 @@ object SingBoxConfigBuilder {
             .put("listen", "127.0.0.1")
             .put("listen_port", listenPort)
 
+        // The standalone Android core cannot use the graphical client's platform DNS API.
+        // Some ROMs expose localhost/::1 as the system resolver to child processes even though
+        // no DNS daemon is reachable from the app sandbox. Use a bootstrap-free DoH endpoint
+        // addressed by IP so upstream hostnames can always be resolved.
+        val dnsTag = "bootstrap-doh"
+        val dns = JSONObject()
+            .put(
+                "servers",
+                JSONArray().put(
+                    JSONObject()
+                        .put("type", "https")
+                        .put("tag", dnsTag)
+                        .put("server", "1.1.1.1")
+                        .put("server_port", 443)
+                        .put("path", "/dns-query")
+                        .put(
+                            "tls",
+                            JSONObject()
+                                .put("enabled", true)
+                                .put("server_name", "cloudflare-dns.com"),
+                        ),
+                ),
+            )
+            .put("final", dnsTag)
+            .put("strategy", "prefer_ipv4")
+
+        profile.outbound.put("domain_resolver", dnsTag)
+
         val config = JSONObject()
             .put("log", JSONObject().put("level", logLevel).put("timestamp", true))
+            .put("dns", dns)
             .put("inbounds", JSONArray().put(inbound))
             .put("outbounds", JSONArray().put(profile.outbound))
             .put(
                 "route",
                 JSONObject()
                     .put("final", "proxy-out")
-                    .put("auto_detect_interface", true),
+                    .put("auto_detect_interface", true)
+                    .put("default_domain_resolver", dnsTag),
             )
         return profile to config
     }

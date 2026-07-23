@@ -15,6 +15,10 @@ object LogStore {
     private val lock = Any()
     private val ansiPattern = Regex("\\u001B\\[[;\\d]*[ -/]*[@-~]")
     private val timeFormat = SimpleDateFormat("HH:mm:ss", Locale.US)
+    private val coreConnectionIdPattern = Regex("""\[\d+\s+[^]]+]""")
+    private val loopbackDnsPortPattern = Regex("""\[::1]:\d+->\[::1]:53""")
+    private var lastFingerprint: String? = null
+    private var repeatedFingerprintCount = 0
 
     data class TailSnapshot(val revision: Long, val text: String)
 
@@ -29,6 +33,17 @@ object LogStore {
             val prepared = buildString {
                 for (message in messages) {
                     for (line in cleanLines(message)) {
+                        val fingerprint = fingerprint(line)
+                        if (fingerprint == lastFingerprint) {
+                            repeatedFingerprintCount += 1
+                            if (repeatedFingerprintCount % 50 != 0) continue
+                            append(timeFormat.format(Date()))
+                            append(" Предыдущая однотипная запись повторилась ещё 50 раз\n")
+                            continue
+                        }
+
+                        lastFingerprint = fingerprint
+                        repeatedFingerprintCount = 0
                         append(timeFormat.format(Date()))
                         append(' ')
                         append(line)
@@ -79,6 +94,24 @@ object LogStore {
         logFile.parentFile?.mkdirs()
         logFile.writeText("", Charsets.UTF_8)
         logFile.setLastModified(System.currentTimeMillis())
+        lastFingerprint = null
+        repeatedFingerprintCount = 0
+    }
+
+    private fun fingerprint(line: String): String {
+        if (
+            line.contains("lookup ") &&
+            line.contains("[::1]:53") &&
+            line.contains("connection refused", ignoreCase = true)
+        ) {
+            val domain = line.substringAfter("lookup ", "").substringBefore(':').ifBlank { "unknown" }
+            return "dns-loopback-refused:$domain"
+        }
+
+        return loopbackDnsPortPattern.replace(
+            coreConnectionIdPattern.replace(line, "[connection]"),
+            "[::1]:PORT->[::1]:53",
+        )
     }
 
     private fun cleanLines(message: String): List<String> {

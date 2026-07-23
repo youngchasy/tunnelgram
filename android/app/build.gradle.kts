@@ -15,12 +15,16 @@ android {
     namespace = "org.tunnelgram.android"
     compileSdk = 35
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     defaultConfig {
         applicationId = "org.tunnelgram.android"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20003
-        versionName = "2.0.0-android-alpha3"
+        versionCode = 20004
+        versionName = "2.0.0-android-alpha3.1"
 
         testInstrumentationRunner = "android.app.Instrumentation"
     }

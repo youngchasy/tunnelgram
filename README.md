@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="./Tunnelgram-preview.png"
+       alt="Tunnelgram — гибкий прокси-клиент"
+       width="100%">
+</p>
+
 # tunnelgram 2.0
 
 `tunnelgram` — локальное приложение для подключения Telegram Desktop. В версии 2.0 доступны два независимых режима работы:
